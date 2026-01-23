@@ -1,4 +1,5 @@
 # ignore all files in directory
 Channel_Simulator/*
 
-l commands below should build and install the latest version of:
+# ignore python virtual environment
+.venv/*
