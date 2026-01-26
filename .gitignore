@@ -3,3 +3,15 @@ Channel_Simulator/*
 
 # ignore python virtual environment
 .venv/*
+
+# ignore all backup files
+*.backup
+
+# ignore logs
+logs/*
+
+# ignore initial test files
+initial_tests/*
+
+# ignore python bytecode
+__pycache__/
