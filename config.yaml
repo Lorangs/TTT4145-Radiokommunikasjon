@@ -1,0 +1,39 @@
+radio:
+  ip_address: "ip:192.168.0.151"      # ip address of sdr radio
+
+transmitter:
+  tx_enable: True                    # Enable/disable transmitter
+  tx_cyclic_buffer_enable: True      # Enable/disable cyclic buffer
+  tx_gain_dB: 0                      # range: -90 to 0 dB
+  tx_bandwidth: 7e6
+  tx_carrier: 866.5e6                 # TX local oscillator (carrier frequenzy)
+
+
+receiver: 
+  rx_enable: false                    # Enable/disable receiver
+  rx_gain_dB: 73                      # range: 0 to 73 dB
+  rx_bandwidth: 7e6
+  rx_carrier: 866.5e6                 # RX local oscillator (carrier frequenzy)
+  gain_mode: 'manual'                 # "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
+  buffer_size: 32768                  # 2**15 samples      
+
+modulation:
+  type: "qpsk"                        # Modulation type: "BPSK", "QPSK", More to come
+  symbol_rate: 250e3                  # Symbols per second
+  samples_per_symbol: 8               # Samples per symbol
+  sample_rate: 2e6                    # (symbol_rate * samples_per_symbol)
+  roll_off: 0.35                      # Roll-off factor (alpha) for pulse shaping filter
+  rrc_filter_span: 10                 # RRC filter span in symbols
+
+preamble:
+  barker_code_length: 7               # Length of Barker code (choice: 7, 11 or 13)
+  preamble_length: 16                 # Length of preamble in bits
+
+framing:
+  payload_size: 2                    # Payload size in bytes
+
+logging:
+  log_level: "INFO"                   # Logging level: "DEBUG", "INFO", "WARNING", "ERROR"
+  log_to_file: true                   # Enable/disable logging to file
+  log_file_path: "radio.log"          # Path to log file
+  log_dir_path: "logs/"               # Directory to save log files
