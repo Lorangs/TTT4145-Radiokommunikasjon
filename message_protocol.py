@@ -1,6 +1,18 @@
 """
-Message Protocol for SDR Chat Application
-Handles message framing, encoding, decoding, and acknowledgments
+Message Protocol Module.
+Defines message structure, creation, parsing, modulation, and demodulation.
+
+Includes Barker code preamble handling and CRC16 checksum verification.
+
+Message Structure:
+    [Barker Code (N bits)] [Message Type (1 byte)] [Payload (M bytes)] [Checksum CRC16 (2 bytes)]
+
+Modulation Types Supported:
+    - BPSK
+    - QPSK
+
+Generated signal of modulated symbols are recieved / transmitted by SDR transciever module.
+
 """
 
 import numpy as np
@@ -9,6 +21,7 @@ import struct
 import yaml
 from barker_code import generate_barker_code
 from scipy import signal
+from queue import Queue
 
 
 class MessageType(Enum):
@@ -25,38 +38,46 @@ class MessageProtocol:
         except Exception as e:
             print(f"Error loading config file: {e}")
             raise e
+        
 
-        self.modulateion_type = str(config['modulation']['type']).upper().strip()
+        # Pre-computed parameters and values
+        self.modulation_type = str(config['modulation']['type']).upper().strip()
         self.barker_length = int(config['preamble']['barker_code_length']) # in bits
         self.barker_bits = generate_barker_code(self.barker_length)
         self.payload_size = int(config['framing']['payload_size'])         # in bytes
 
+        self.msg_frame_size = 1 + self.payload_size + 2  # type (1 byte) + payload + checksum (2 bytes)
+        self.message_size_bits = 8 * self.msg_frame_size  # in bits
+
+        self.correlation_threshold = float(config['receiver']['correlation_threshold'])
+
+        self.msg_type_struct = struct.Struct("B")  # 1 byte for message type
+        self.checksum_struct = struct.Struct("H")  # 2 bytes for CRC16
+
+        self.barker_energy = np.sqrt(np.sum(np.abs(self.barker_bits)**2))
+
         # Generate reference Barker sequence (modulated)
-        if self.modulateion_type == "BPSK":
+        # Store expected number of symbols in a message
+        expected_num_bits = 8 * (1 + self.payload_size + 2)  # 1 byte type + payload + 2 byte checksum
+
+
+        if self.modulation_type == "BPSK":
             self.barker_symbols = (2 * self.barker_bits - 1).astype(np.int8)
+            self.expected_num_symbols = expected_num_bits * 1  # 1 symbol per bit
 
-        elif self.modulateion_type == "QPSK":
+        elif self.modulation_type == "QPSK":
             barker_b = self.barker_bits.copy()
-
-            if len(barker_b) % 2 != 0:
-                barker_b = np.append(barker_b, 0)
 
             bit_pairs = barker_b.reshape(-1, 2)
             I = (1 - 2 * bit_pairs[:, 0]).astype(np.int8)
             Q = (1 - 2 * bit_pairs[:, 1]).astype(np.int8)
             self.barker_symbols = (I + 1j*Q).astype(np.complex64)
 
-        else:
-            raise NotImplementedError(f"Modulation type {self.modulateion_type} not supported")
-
-        # Store expected number of symbols in a message
-        expected_num_bits = 8 * (1 + self.payload_size + 2)  # 1 byte type + payload + 2 byte checksum
-
-
-        if self.modulateion_type == "BPSK":
-            self.expected_num_symbols = expected_num_bits * 1  # 1 symbol per bit
-        elif self.modulateion_type == "QPSK":
             self.expected_num_symbols = (expected_num_bits + 1) // 2 # 2 bits per symbol
+
+        else:
+            raise NotImplementedError(f"Modulation type {self.modulation_type} not supported")
+
 
     def create_message(
             self,
@@ -69,11 +90,13 @@ class MessageProtocol:
         if len(payload) > self.payload_size:
             raise ValueError(f"Payload size exceeds maximum of {self.payload_size} bytes")
         
-        _msg_type = struct.pack("B", msg_type.value)
+        _msg_type = self.msg_type_struct.pack(msg_type.value)
         padded_payload = payload.ljust(self.payload_size, b'\0')
-        checksum = struct.pack("H", self._crc16(_msg_type + padded_payload))
-        message = _msg_type + padded_payload + checksum
-        return message
+
+        data = _msg_type + padded_payload
+        checksum = self.checksum_struct.pack(self._crc16(data))
+        
+        return data + checksum
     
     def parse_message(self, message: bytes) -> tuple[MessageType, bytes]:
         """Parse a received message and verify checksum.
@@ -86,11 +109,11 @@ class MessageProtocol:
         if len(message) < 1 + self.payload_size + 2:
             raise ValueError("Message too short to parse")
 
-        msg_type_value = struct.unpack("B", message[0:1])[0]
+        msg_type_value = self.msg_type_struct.unpack(message[0:1])[0]
         payload = message[1:1 + self.payload_size]
-        received_checksum = struct.unpack("H", message[1 + self.payload_size:1 + self.payload_size + 2])[0]
+        received_checksum = self.checksum_struct.unpack(message[-2:])[0]
 
-        computed_checksum = self._crc16(message[0:1 + self.payload_size])
+        computed_checksum = self._crc16(message[:-2])
         if received_checksum != computed_checksum:
             raise ValueError("Checksum mismatch")
 
@@ -112,12 +135,13 @@ class MessageProtocol:
             int: Index of the start of the Barker sequence, or None if not found.
         """
 
-        correlation = np.abs( signal.correlate( received_symbols, self.barker_symbols, mode='valid', method='fft'))
-        peak_index = np.argmax(correlation)
-        peak_value = correlation[peak_index]
+        correlation = signal.correlate( received_symbols, self.barker_symbols, mode='valid', method='fft')
+        correlation_abs = np.abs(correlation)
+        peak_index = np.argmax(correlation_abs)
+        peak_value = correlation_abs[peak_index]
 
-        # check threshold
-        threshold = 0.8 * np.max(correlation)
+        # TODO: Adjust threshold method to be relative to precalculated max correlation value
+        threshold = self.correlation_threshold * correlation_abs[peak_index]
         if peak_value < threshold:
             return None
 
@@ -164,22 +188,22 @@ class MessageProtocol:
     def modulate_message(self, message: bytes) -> np.array:
         """Placeholder for modulation function based on modulation type."""
         
-        if self.modulateion_type == "BPSK":
+        if self.modulation_type == "BPSK":
             return self._bpsk_modulate(message)
-        elif self.modulateion_type == "QPSK":
+        elif self.modulation_type == "QPSK":
             return self._qpsk_modulate(message)
         else:
-            raise NotImplementedError(f"Modulation type {self.modulateion_type} not implemented.")
+            raise NotImplementedError(f"Modulation type {self.modulation_type} not implemented.")
         
     def demodulate_message(self, symbols: np.array) -> bytes:
         """Placeholder for demodulation function based on modulation type."""
         
-        if self.modulateion_type == "BPSK":
+        if self.modulation_type == "BPSK":
             return self._bpsk_demodulate(symbols)
-        elif self.modulateion_type == "QPSK":
+        elif self.modulation_type == "QPSK":
             return self._qpsk_demodulate(symbols)
         else:
-            raise NotImplementedError(f"Demodulation type {self.modulateion_type} not implemented.")
+            raise NotImplementedError(f"Demodulation type {self.modulation_type} not implemented.")
         
         
     def _bpsk_modulate(self, message: bytes) -> np.array:
@@ -246,24 +270,37 @@ class MessageProtocol:
 
 
 if __name__ == "__main__":
+    from sdr_plots import StaticSDRPlotter
+    from matplotlib.pyplot import show
+
     msg_protocol = MessageProtocol()
+    plotter = StaticSDRPlotter()
+
 
     test_payload = b"He"
 
     message = msg_protocol.create_message(MessageType.TEXT, test_payload)
     print(f"Created Message: {message}")
 
+   
+
     modulated_symbols = msg_protocol.modulate_message(message)
-    print(f"Modulated Symbols: {modulated_symbols}")
 
+    # pad to simulate delay
+    delay = np.array([1+1j]*50, dtype=np.complex64)
+    modulated_symbols = np.concatenate((delay, modulated_symbols))
+    print(f"Modulated Symbols: {message}")
 
-    # shift symbols to simulate delay
-    modulated_symbols = np.concatenate((np.zeros(10, dtype=modulated_symbols.dtype), modulated_symbols))
 
     # add AWGN noise as channel simulator
-    noise = np.random.normal(0, 0.1, len(modulated_symbols)).astype(modulated_symbols.dtype)
+    noise_I = np.random.normal(0, 0.2, modulated_symbols.shape)
+    noise_Q = np.random.normal(0, 0.2, modulated_symbols.shape)
+    noise = noise_I + 1j*noise_Q
     modulated_symbols = modulated_symbols + noise
-    
+
+
+    plotter.plot_constellation(modulated_symbols, title="Received Symbols with Noise - Constellation")
+
     barker_delay = msg_protocol.detect_barker_sequence(modulated_symbols)
     print(f"Barker Delay Index: {barker_delay}")
 
@@ -272,6 +309,11 @@ if __name__ == "__main__":
 
     demodulated_message = msg_protocol.demodulate_message(stripped_symbols)
     print(f"Demodulated Message: {demodulated_message}")
+
+    parsed_type, parsed_payload = msg_protocol.parse_message(demodulated_message)
+    print(f"Parsed Message Type: {parsed_type}, Payload: {parsed_payload}")
+
+    show()
 
 
 
