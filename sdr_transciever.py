@@ -132,13 +132,12 @@ if __name__ == "__main__":
 
     plotter = StaticSDRPlotter()
 
-    plotter.plot_frequency_spectrum(
+    plotter.plot_psd(
         recieved_signal, 
-        title="Received Signal Spectrum", 
-        sample_rate=transciever.sdr.sample_rate,
-        center_freq=transciever.sdr.rx_lo
-        )
-
+        title="Received Signal PSD", 
+        center_freq=transciever.sdr.rx_lo, 
+        sample_rate=100e7
+    )
     show()
 
     del transciever

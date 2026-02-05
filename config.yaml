@@ -23,8 +23,8 @@ modulation:
   type: "qpsk"                        # Modulation type: "BPSK", "QPSK", More to come
   symbol_rate: 250e3                  # Symbols per second
   samples_per_symbol: 8               # Samples per symbol
-  sample_rate: 2e6                    # (symbol_rate * samples_per_symbol)
-  rrc_roll_off: 0.1                     # Roll-off factor (alpha) for pulse shaping filter
+  sample_rate: 1e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
+  rrc_roll_off: 0.5                   # Roll-off factor (alpha) for pulse shaping filter
   rrc_filter_span: 10                 # RRC filter span in symbols
 
 preamble:

@@ -1,6 +1,13 @@
+"""
+This module generates a Root Raised Cosine (RRC) filter based on the configuration specified in the config.yaml file. 
+The generated filter coefficients are then written to a file in a format compatible with the SDR transceiver.
+"""
+
+
 import commpy
 from yaml import safe_load
-from matplotlib.pyplot import plot, show
+from matplotlib.pyplot import plot, show, stem
+import numpy as np
 
 try: 
     with open("config.yaml", 'r') as f:
@@ -12,14 +19,17 @@ except Exception as e:
 def rrc_filter(config_file: str ="config.yaml"):
     """Generate Root Raised Cosine (RRC) filter based on configuration."""
 
-
     rolloff = float(config['modulation']['rrc_roll_off'])
     span = int(config['modulation']['rrc_filter_span'])
     sample_rate = float(config['modulation']['sample_rate'])
     sps = int(config['modulation']['samples_per_symbol'])
+    symbol_rate = float(config['modulation']['symbol_rate'])
 
-    t, rrc_taps = commpy.filters.rrcosfilter(N=span * sps, alpha=rolloff, Ts=sps/sample_rate, Fs=sample_rate)
-    return t, rrc_taps
+    t, rrc_taps = commpy.filters.rrcosfilter(N=span * sps, alpha=rolloff, Ts=1/symbol_rate, Fs=sample_rate)
+    return t, rrc_taps 
+
+
+
 
 def write_filter_to_file(rrc_taps, filename: str = "rrc_filter.ftr"):
     """Write RRC filter coefficients to a file."""
@@ -45,5 +55,5 @@ def write_filter_to_file(rrc_taps, filename: str = "rrc_filter.ftr"):
         raise e
     
 if __name__ == "__main__":
-    rrc_taps = rrc_filter()[1]
+    t, rrc_taps = rrc_filter()
     write_filter_to_file(rrc_taps)
