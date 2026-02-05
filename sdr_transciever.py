@@ -2,6 +2,7 @@
 Test and measure the PSD of transmitter of Adalm Pluto SDR
 """
 
+
 import adi
 from yaml import safe_load
 from sdr_plots import LiveSDRPlotter, StaticSDRPlotter
@@ -33,9 +34,6 @@ class SDRTransciever:
 
         self.tx_queue = queue.Queue()
         self.rx_queue = queue.Queue()
-
-        # Generate pulse shaping filter
-        self.rrc_filter = self._generate_rrc_filter()
   
     def __del__(self):
         """Destructor to ensure SDR is disconnected."""
@@ -80,52 +78,18 @@ class SDRTransciever:
             print(f"RX Bandwidth\t: {self.sdr.rx_rf_bandwidth/1e6:.3f} MHz")
             print(f"RX Carrier\t: {self.sdr.rx_lo/1e6:.3f} MHz")
             print(f"RX Gain Mode\t: {self.sdr.gain_control_mode_chan0}")
+
+            # set TX and RX filter
+            self.sdr.filter = self.config['radio']['rrc_filter']
+            print(f"RRC Filter\t: {self.sdr.filter}")
+
             print("=================================================================\n")
             return True
         
         except Exception as e:
             print(f"Connection failed: {e}")
             return False
-        
 
-    def _generate_rrc_filter(self):
-        """Generate Root Raised Cosine (RRC) filter for pulse shaping."""
-        from scipy.signal import fir_filter_design as design
-        from scipy.signal import lfilter
-
-        roll_off = float(self.config['modulation']['roll_off'])
-        sps = int(self.config['modulation']['samples_per_symbol'])
-        num_taps = int(self.config['modulation']['rrc_filter_span']) * sps + 1  # Ensure odd number of taps
-
-        t = np.arange(-num_taps//2, num_taps//2, step=1) / sps
-        h = np.zeros_like(t)
-
-        symbols_per_second = int(float(self.config['modulation']['symbol_rate']))
-
-        for i, time in enumerate(t):
-            if time == 0:
-                h[i] = (1 + roll_off * (4/np.pi - 1)) * symbols_per_second
-
-            elif np.abs(time) == 1 / (4 * roll_off * symbols_per_second):
-                h[i] = (
-                    roll_off * symbols_per_second / (np.sqrt(2))) * (
-                        (1 + 2/np.pi) * np.sin(np.pi / (4 * roll_off)) +
-                        (1 - 2/np.pi) * np.cos(np.pi / (4 * roll_off))
-                    )
-
-            else:
-                h[i] = (
-                        np.sin(np.pi * time * symbols_per_second * (1 - roll_off)) +
-                        4 * roll_off * time * symbols_per_second * np.cos(np.pi * time * symbols_per_second * (1 + roll_off))
-                    ) * (
-                        symbols_per_second  / (
-                            np.pi * time * symbols_per_second * (1 - (4 * roll_off * time * symbols_per_second) ** 2)
-                        )   
-                    )
-    
-        # Normalize filter energy
-        h /= np.sqrt(np.sum(h**2))
-        return h
 
 
     def stop_receiving(self):
@@ -160,33 +124,19 @@ if __name__ == "__main__":
         print("Failed to connect to SDR. Exiting.")
         exit(1)
     
+    noise_signal = 2**14 * 0.01 * (np.random.randn(1024) + 1j*np.random.randn(1024))
+
+    transciever.sdr.tx(noise_signal.astype(np.complex64))
+
+    recieved_signal = transciever.sdr.rx()
+
     plotter = StaticSDRPlotter()
-#
-#    signal = transciever.generate_test_signal(duration=1.0, freq=100e3)
-#    transciever.sdr.tx(signal)
-#
-#    plotter.plot_time_domain(signal, sample_rate=float(transciever.config['modulation']['sample_rate']), title="Transmitted Signal - Time Domain")
-#    
-#
-#    print(f"Signal transmitted:\n\
-#            Length:\t{len(signal)} samples\n\
-#            Duration:\t{len(signal)/float(transciever.config['modulation']['sample_rate']):.3f} seconds\n\
-#            Frequency:\t{500e3/1e6:.3f} MHz\n")
-#
-    show()
 
-    #plotter = LiveSDRPlotter(
-    #    data_callback=transciever.sdr.rx, 
-    #    sample_rate=float(transciever.config['modulation']['sample_rate']),
-    #    center_freq=float(transciever.config['receiver']['rx_carrier'])
-    #    )
-
-    #plotter.start_spectrum_analyzer()
-    samples = transciever.sdr.rx()
-    plotter.plot_spectrogram(
-        samples, 
-        sample_rate=float(transciever.config['modulation']['sample_rate']),
-        title="Received Signal - Spectrogram"
+    plotter.plot_frequency_spectrum(
+        recieved_signal, 
+        title="Received Signal Spectrum", 
+        sample_rate=transciever.sdr.sample_rate,
+        center_freq=transciever.sdr.rx_lo
         )
 
     show()

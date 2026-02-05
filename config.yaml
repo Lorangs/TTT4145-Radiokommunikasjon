@@ -1,5 +1,6 @@
 radio:
   ip_address: "ip:192.168.0.151"      # ip address of sdr radio
+  rrc_filter: "rrc_filter.ftr"        # Path to RRC filter coefficients file
 
 transmitter:
   tx_enable: True                    # Enable/disable transmitter
@@ -23,7 +24,7 @@ modulation:
   symbol_rate: 250e3                  # Symbols per second
   samples_per_symbol: 8               # Samples per symbol
   sample_rate: 2e6                    # (symbol_rate * samples_per_symbol)
-  roll_off: 0.35                      # Roll-off factor (alpha) for pulse shaping filter
+  rrc_roll_off: 0.1                     # Roll-off factor (alpha) for pulse shaping filter
   rrc_filter_span: 10                 # RRC filter span in symbols
 
 preamble:
