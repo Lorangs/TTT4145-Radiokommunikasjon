@@ -8,14 +8,12 @@ class msgType(Enum):
     DATA = 0
     ACK = 1
 
-
-
 @dataclass(init=False, repr=False)
 class Datagram():
     """ 
     Messaage format:
-        - barker_code: 13 bits np.uint8 array (predefined preamble)
-        - msg_type: 2 bit string (DATA or ACK)
+        - barker_code: 2 bytes (13-bit Barker code as preamble, padded to 16 bits)
+        - msg_type: 1 byte string (DATA or ACK)
         - size_payload: 1 byte np.uint8 (length of payload in bytes) (0 - 255)
         - payload: variable length np.uint8 array
         - crc16: 2 bytes (CRC16 checksum of header + payload)
@@ -26,14 +24,12 @@ class Datagram():
     _payload: np.ndarray
     _crc16: np.uint16
 
-    def __init__(self, payload: np.ndarray, msg_type: msgType = msgType.DATA):
+    def __init__(self, msg_type: msgType = msgType.DATA, payload: np.ndarray = np.array([], dtype=np.uint8)):
         """Initialize datagram with payload and message type. Automatically computes CRC16 checksum.
             Args:
-                payload (np.ndarray): Payload data as a numpy array of uint8.
                 msg_type (msgType): Type of message (DATA or ACK).
+                payload (np.ndarray): Payload data as a numpy array of uint8. If None, it will be treated as an empty payload.
         """
-        if payload is None:
-            payload = np.array([], dtype=np.uint8)
 
         if len(payload) > 255:
             raise ValueError("Payload size exceeds maximum of 255 bytes.")
@@ -71,10 +67,8 @@ class Datagram():
             ValueError: If the data is corrupted.
         """
         MIN_LENGTH = 6 # 2 byte barker + 1 byte msg_type + 1 byte payload_size + 2 byte CRC16
-        
-        if len(data) < MIN_LENGTH: 
-            raise ValueError("Data is too short to be a valid datagram.")
-        
+        if len(data) < MIN_LENGTH:
+            raise ValueError("Data length is too short to be a valid datagram.")
 
         instance = cls.__new__(cls)
         
@@ -87,6 +81,8 @@ class Datagram():
 
         instance._msg_type = msgType(data[2])
         instance._payload_size = data[3]
+        if len(data) != MIN_LENGTH + instance._payload_size:
+            raise ValueError("Data length does not match expected length based on payload size.")
 
         
         # check if data length matches expected length based on payload size
@@ -145,10 +141,10 @@ class Datagram():
         return len(self.pack())
     
     def __repr__(self) -> str:
-        return (f"Datagram(msg_type={self._msg_type}, "
-                f"payload_size={self._payload_size}, "
-                f"payload={self._payload}, "
-                f"crc16={hex(self._crc16)})")
+        return (f"\n\tmsg_type={self._msg_type.name},\n"
+                f"\tpayload_size={self._payload_size},\n"
+                f"\tpayload={self._payload},\n"
+                f"\tcrc16={hex(self._crc16)}\n")
 
     
 if __name__ == "__main__":
@@ -159,3 +155,4 @@ if __name__ == "__main__":
     print(f"Packed data: {packed_data}")
     unpacked_datagram = Datagram.unpack(packed_data)
     print(f"Unpacked datagram: {unpacked_datagram}")
+

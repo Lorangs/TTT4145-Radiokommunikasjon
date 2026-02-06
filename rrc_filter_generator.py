@@ -16,7 +16,7 @@ except Exception as e:
     print(f"Error loading config file: {e}")
     raise e
 
-def rrc_filter(config_file: str ="config.yaml"):
+def rrc_filter(config_file: str ="config.yaml") -> tuple[np.ndarray, np.ndarray]:
     """Generate Root Raised Cosine (RRC) filter based on configuration."""
 
     rolloff = float(config['modulation']['rrc_roll_off'])
