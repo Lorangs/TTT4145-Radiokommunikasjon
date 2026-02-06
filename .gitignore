@@ -8,7 +8,7 @@ Channel_Simulator/*
 *.backup
 
 # ignore logs
-logs/*
+log/*
 
 # ignore initial test files
 initial_tests/*

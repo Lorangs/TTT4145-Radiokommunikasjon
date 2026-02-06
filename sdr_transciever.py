@@ -4,51 +4,33 @@ Test and measure the PSD of transmitter of Adalm Pluto SDR
 
 
 import adi
-from yaml import safe_load
 from sdr_plots import LiveSDRPlotter, StaticSDRPlotter
 import queue
 from scipy import signal
 import numpy as np
-
+import logging
 
 
 class SDRTransciever:  
-    def __init__(self, config_file: str ="config.yaml"):
+    def __init__(self, config: dict):
         """Initialize SDR with given configuration."""
-        print("\n------------------------------------------------")
-        print("Initilizing Adalm Pluto SDR Transciever...")
-        print("------------------------------------------------\n")
-
-        try: 
-            with open(config_file, 'r') as f:
-                config = safe_load(f)
-        except Exception as e:
-            print(f"Error loading config file: {e}")
-            raise e
-
+        logging.info("Initializing SDR Transciever...")
         self.config = config
         self.sdr = None
-
-        self.rx_thread = None
-        self.rx_running = False
-
-        self.tx_queue = queue.Queue()
-        self.rx_queue = queue.Queue()
   
     def __del__(self):
         """Destructor to ensure SDR is disconnected."""
-        self.sdr.tx_destroy_buffer() # Ensure TX buffer is destroyed
-        self.stop_receiving()
         if self.sdr:
+            self.sdr.tx_destroy_buffer() # Ensure TX buffer is destroyed
             del self.sdr
             self.sdr = None
-            print("SDR disconnected and resources released.")
+            logging.info("SDR Transciever resources cleaned up.")
 
     def connect(self):
         """Connect to Adalm Pluto SDR and configure."""
         try:
             self.sdr = adi.Pluto(self.config['radio']['ip_address'])
-            print(f"Pluto {self.sdr.uri}")
+            logging.info(f"Connected to SDR at {self.config['radio']['ip_address']}.")
 
             # Configure TX
             self.sdr.tx_rf_bandwidth = int(float(self.config['transmitter']['tx_bandwidth']))
@@ -57,11 +39,11 @@ class SDRTransciever:
             self.sdr.sample_rate = int(float(self.config['modulation']['sample_rate']))
             self.sdr.tx_cyclic_buffer = bool(self.config['transmitter']['tx_cyclic_buffer'])
             
-            print(f"Sample Rate\t: {self.sdr.sample_rate/1e6:.3f} MHz")
-            print(f"TX Bandwidth\t: {self.sdr.tx_rf_bandwidth/1e6:.3f} MHz")
-            print(f"TX Carrier\t: {self.sdr.tx_lo/1e6:.3f} MHz")
-            print(f"TX Gain\t\t: {self.sdr.tx_hardwaregain_chan0} dB")
-            print(f"TX Cyclic Buffer\t: {self.sdr.tx_cyclic_buffer}")
+            logging.info(f"TX Bandwidth\t: {self.sdr.tx_rf_bandwidth/1e6:.3f} MHz")
+            logging.info(f"TX Carrier\t: {self.sdr.tx_lo/1e6:.3f} MHz")
+            logging.info(f"TX Gain\t\t: {self.sdr.tx_hardwaregain_chan0} dB")
+            logging.info(f"Sample Rate\t: {self.sdr.sample_rate/1e6:.3f} MS/s")
+            logging.info(f"TX Cyclic Buffer: {self.sdr.tx_cyclic_buffer}")
 
             # Configure RX
 
@@ -71,34 +53,24 @@ class SDRTransciever:
             self.sdr.gain_control_mode_chan0 = self.config['receiver']['gain_mode']
             if self.config['receiver']['gain_mode'] == 'manual':
                 self.sdr.rx_hardwaregain_chan0 = float(self.config['receiver']['rx_gain_dB'])
-                print(f"RX Gain\t\t: {self.sdr.rx_hardwaregain_chan0} dB")
+                logging.info(f"RX Gain\t\t: {self.sdr.rx_hardwaregain_chan0} dB (manual mode)")
             else:
-                print(f"RX Gain\t\t: {self.sdr.gain_control_mode_chan0} mode")
+                logging.info(f"RX Gain Mode\t: {self.sdr.gain_control_mode_chan0} (automatic mode)")
 
-            print(f"RX Bandwidth\t: {self.sdr.rx_rf_bandwidth/1e6:.3f} MHz")
-            print(f"RX Carrier\t: {self.sdr.rx_lo/1e6:.3f} MHz")
-            print(f"RX Gain Mode\t: {self.sdr.gain_control_mode_chan0}")
+            logging.info(f"RX Bandwidth\t: {self.sdr.rx_rf_bandwidth/1e6:.3f} MHz")
+            logging.info(f"RX Carrier\t: {self.sdr.rx_lo/1e6:.3f} MHz")
+            logging.info(f"RX Buffer Size\t: {self.sdr.rx_buffer_size} samples")
 
             # set TX and RX filter
             self.sdr.filter = self.config['radio']['rrc_filter']
-            print(f"RRC Filter\t: {self.sdr.filter}")
+            logging.info(f"RRC Filter set with {len(self.sdr.filter)} taps.")
 
-            print("=================================================================\n")
             return True
         
         except Exception as e:
-            print(f"Connection failed: {e}")
+            logging.error(f"Error connecting to SDR: {e}")
             return False
 
-
-
-    def stop_receiving(self):
-        """Stop receiving data from SDR"""
-        self.rx_running = False
-        if self.rx_thread:
-            self.rx_thread.join(timeout=2)
-            self.rx_thread = None
-        print("Stopped receiving data")
 
     def generate_test_signal(self, duration=1.0, freq=100e3):
         """Generate a test signal: a simple sine wave.

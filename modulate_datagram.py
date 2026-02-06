@@ -22,21 +22,15 @@ from scipy import signal
 
 
 class ModulationProtocol:
-    def __init__(self, config_file: str ="config.yaml"):
+    def __init__(self, config: dict):
         """Initialize Message Protocol with given configuration."""
-        try: 
-            with open(config_file, 'r') as f:
-                config = yaml.safe_load(f)
-        except Exception as e:
-            print(f"Error loading config file: {e}")
-            raise e
 
         # Pre-computed parameters and values
         self.modulation_type = str(config['modulation']['type']).upper().strip()
 
         self.correlation_threshold = float(config['receiver']['correlation_threshold'])
 
-        self.barker_energy = np.sqrt(np.sum(np.abs(self.barker_bits)**2))
+        #self.barker_energy = np.sqrt(np.sum(np.abs(self.barker_bits)**2))
 
 
     # ================= Barker detection and message extraction =================

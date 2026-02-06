@@ -1,5 +1,7 @@
 import numpy as np
 from dataclasses import dataclass
+
+
 from barker_code import get_barker_bitstream
 
 from enum import Enum
@@ -46,7 +48,38 @@ class Datagram():
             bytes([self._payload_size]) + 
             self._payload.tobytes())
             )
-
+        
+        
+    @classmethod
+    def from_string(cls, text: str, msg_type: msgType = msgType.DATA, encoding: str = 'utf-8') -> 'Datagram':
+        """
+        Create a datagram from a text string.
+        
+        Args:
+            text: Text message to send
+            msg_type: Message type (default: DATA)
+            encoding: Text encoding (default: utf-8)
+            
+        Returns:
+            Datagram object
+        """
+        payload = np.frombuffer(text.encode(encoding), dtype=np.uint8)
+        return cls(msg_type=msg_type, payload=payload)
+    
+    @classmethod
+    def from_bytes(cls, data: bytes, msg_type: msgType = msgType.DATA) -> 'Datagram':
+        """
+        Create a datagram from raw bytes.
+        
+        Args:
+            data: Raw bytes to send
+            msg_type: Message type (default: DATA)
+            
+        Returns:
+            Datagram object
+        """
+        payload = np.frombuffer(data, dtype=np.uint8)
+        return cls(msg_type=msg_type, payload=payload)
 
     def pack(self) -> bytes:
         """Pack datagram into a single numpy array of uint8."""

@@ -10,7 +10,7 @@ from matplotlib.pyplot import plot, show, stem
 import numpy as np
 
 try: 
-    with open("config.yaml", 'r') as f:
+    with open("setup/config.yaml", 'r') as f:
         config = safe_load(f)
 except Exception as e:
     print(f"Error loading config file: {e}")
