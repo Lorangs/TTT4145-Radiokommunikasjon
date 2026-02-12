@@ -114,7 +114,10 @@ class SDRChatApp:
         if not self.sdr.connect():
             logging.debug("Failed to connect to SDR. Cannot start application.")
             #return False
+        noiser_flor_dB = 10*np.log10(np.mean(self.sdr.sdr.rx()))
+        logging.info(f"SDR connected successfully. Noise floor: {noiser_flor_dB:.2f} dB")
 
+        self.modulation_protocol.set_noise_floor_dB(noiser_flor_dB)
         self.running = True
 
         self.rx_thread = threading.Thread(target=self._rx_loop, daemon=True, name="RX_Thread")
