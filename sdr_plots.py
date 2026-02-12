@@ -55,19 +55,23 @@ class StaticSDRPlotter:
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize)
             
             # Impulse response
-            ax1.plot(time_vector, coefficients, linewidth=0.8)
+            ax1.stem(time_vector, coefficients)
+
             ax1.set_xlabel('Time (s)', fontsize=10)
             ax1.set_ylabel('Amplitude', fontsize=10)
             ax1.set_title(f"{title} - Impulse Response", fontsize=12)
             ax1.grid(True, alpha=0.3)
             
             # Frequency response
-            w, h = signal.freqz(coefficients, worN=512)
-            freqs = w * sample_rate / (2 * np.pi) / 1e6  # Convert to MHz
-            h_db = 20 * np.log10(np.abs(h) + 1e-12)  # Convert to dB
-            
-            ax2.plot(freqs, h_db, linewidth=0.8)
-            ax2.set_xlabel('Frequency (MHz)', fontsize=10)
+            nfft = 2048
+            H = np.fft.fft(coefficients, n=nfft)
+            H_shifted = np.fft.fftshift(H)
+            H_dB = 20 * np.log10(np.abs(H_shifted) + 1e-12)  # dB, add small value to avoid log(0)
+
+            freqs = np.fft.fftshift(np.fft.fftfreq(nfft, 1/sample_rate)) / 1e3  # kHz
+
+            ax2.plot(freqs, H_dB, linewidth=1)
+            ax2.set_xlabel('Frequency (kHz)', fontsize=10)
             ax2.set_ylabel('Magnitude (dB)', fontsize=10)
             ax2.set_title(f"{title} - Frequency Response", fontsize=12)
             ax2.grid(True, alpha=0.3)

@@ -14,14 +14,14 @@ from datagram import Datagram, msgType
 class ChatTUI:
     """Simple terminal-based chat UI"""
     
-    def __init__(self, max_display_messages: int = 20):
+    def __init__(self, config: dict):
         """
         Initialize chat UI
         Args:
             max_display_messages: Maximum messages to display on screen
         """
-        self.max_display_messages = max_display_messages
-        self.messages: deque[str] = deque(maxlen=max_display_messages)  # Store recent messages for display
+        self.max_display_messages = int(config['radio']['display_number_of_messages'])
+        self.messages: deque[str] = deque(maxlen=self.max_display_messages)  # Store recent messages for display
 
         logging.info("Chat TUI initialized.")
 

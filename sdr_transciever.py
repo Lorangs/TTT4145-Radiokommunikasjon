@@ -61,10 +61,6 @@ class SDRTransciever:
             logging.info(f"RX Carrier\t: {self.sdr.rx_lo/1e6:.3f} MHz")
             logging.info(f"RX Buffer Size\t: {self.sdr.rx_buffer_size} samples")
 
-            # set TX and RX filter
-            self.sdr.filter = self.config['radio']['rrc_filter']
-            logging.info(f"RRC Filter set with {len(self.sdr.filter)} taps.")
-
             return True
         
         except Exception as e:

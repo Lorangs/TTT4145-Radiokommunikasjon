@@ -4,9 +4,11 @@ import threading
 import time
 from datetime import datetime
 from chat_tui import ChatTUI
-from modulate_datagram import ModulationProtocol
+from modulation import ModulationProtocol
 from datagram import Datagram, msgType
 from sdr_transciever import SDRTransciever
+from rrc_filter import RRCFilter
+from barker_detection import BarkerDetector
 from queue import Queue, Empty
 
 import os
@@ -21,32 +23,22 @@ class SDRChatApp:
     def __init__(self, config_file: str ="setup/config.yaml"):
         """Initialize the SDR Chat Application."""
 
+        # read configuration file
         try:
             with open(config_file, 'r') as f:
                 config = safe_load(f)
         except Exception as e:
             print(f"Error loading config file: {e}")
             raise e
-        
-        # Create logs directory if it doesn't exist
-        log_dir = "log"
-        os.makedirs(log_dir, exist_ok=True)
 
-        self.log_file = os.path.join(log_dir, f"{datetime.now().date()}-chat-history.txt")
-        self.debug_file = os.path.join(log_dir, f"{datetime.now().date()}-debug.log")
-        self._setup_logging(str(config['radio']['log_level']).upper().strip())
-
-        try:
-            with open(self.log_file, 'a') as f:
-                f.write(f"\n\n--- New Chat Session Started at {datetime.now().time()} ---\n")
-        except Exception as e:
-            print(f"Error initializing chat history log: {e}")
-            raise e
-
+        # Initialize Modules with configuration
         self.modulation_protocol = ModulationProtocol(config)
-        self.tui = ChatTUI(max_display_messages=int(config['radio']['display_number_of_messages']))
+        self.matched_filter = RRCFilter(config)
+        self.tui = ChatTUI(config)
         self.sdr = SDRTransciever(config)
+        self.barker_detector = BarkerDetector(config)
 
+        # Threading and synchronization primitives
         self.running: bool = False
         self.rx_thread: threading.Thread = None
         self.tx_thread: threading.Thread = None
@@ -54,8 +46,26 @@ class SDRChatApp:
         self.shutdown_event = threading.Event()
         self.tui_refresh_event = threading.Event()
 
+        # Message queues for inter-thread communication. Queues are inherrently thread-safe, so we can avoid manual locks for message passing.
         self.tx_queue: Queue[Datagram] = Queue(maxsize=32)  # Queue for outgoing messages
         self.rx_queue: Queue[Datagram] = Queue(maxsize=32)  # Queue for incoming messages
+
+        # Create logs directory if it doesn't exist
+        log_dir = "log"
+        os.makedirs(log_dir, exist_ok=True)
+        self.log_file = os.path.join(log_dir, f"{datetime.now().date()}-chat-history.txt")
+        self.debug_file = os.path.join(log_dir, f"{datetime.now().date()}-debug.log")
+        self._setup_logging(str(config['radio']['log_level']).upper().strip())
+
+        # Initialize chat history log with session start header
+        try:
+            with open(self.log_file, 'a') as f:
+                f.write(f"\n\n--- New Chat Session Started at {datetime.now().time()} ---\n")
+        except Exception as e:
+            logging.error(f"Error initializing chat history log: {e}")
+            raise e
+        
+        logging.info("SDR Chat Application initialized successfully.")
 
     def __del__(self):
         try:
@@ -82,7 +92,7 @@ class SDRChatApp:
             logging.error(f"Error during application cleanup: {e}")
 
 
-    
+    # ================= Start and Stop of sub threads =================
     def stop(self):
         """Stop the SDR Chat Application."""
         logging.info("Stopping SDR Chat Application...")
@@ -112,16 +122,14 @@ class SDRChatApp:
 
     def start(self):
         """Start the SDR Chat Application."""
-        if not self.sdr.connect():
+        if self.sdr.connect():   
+            noiser_flor_dB = 20*np.log10(np.mean(self.sdr.sdr.rx()))
+            self.barker_detector.set_noise_floor_dB(noiser_flor_dB)
+            logging.info(f"SDR Noise floor: {noiser_flor_dB:.2f} dB")
+        else:
             logging.debug("Failed to connect to SDR. Cannot start application.")
 
         self.running = True
-            #return False
-        #noiser_flor_dB = 10*np.log10(np.mean(self.sdr.sdr.rx()))
-        #logging.info(f"SDR connected successfully. Noise floor: {noiser_flor_dB:.2f} dB")
-
-        #self.modulation_protocol.set_noise_floor_dB(noiser_flor_dB)
-
         self.rx_thread = threading.Thread(target=self._rx_loop, daemon=True, name="RX_Thread")
         self.tx_thread = threading.Thread(target=self._tx_loop, daemon=True, name="TX_Thread")
         self.tui_thread = threading.Thread(target=self._tui_loop, daemon=True, name="TUI_Thread")
@@ -135,6 +143,7 @@ class SDRChatApp:
         return True
     
     
+    # ================= Message Handling =================
     def send_ack(self, msg_id: np.uint8):
         """Send an ACK for the recieved datagram carrying its msg_id."""
         try:
@@ -158,7 +167,7 @@ class SDRChatApp:
             logging.error(f"Failed to enqueue datagram ID {datagram.get_msg_id}: {e}")
             return False
         
-
+    # ================= Callback loops for threads =================
     def _rx_loop(self):
         """Receive loop - continuously receive data from SDR and process it."""
         logging.info("RX loop started.")
@@ -269,6 +278,8 @@ class SDRChatApp:
 
         logging.info("TUI loop stopped.")
 
+        
+    # ================= Logging ===================
     def chat_history_log(self, message: str):
         """Append a message to the chat history log file."""
         try:

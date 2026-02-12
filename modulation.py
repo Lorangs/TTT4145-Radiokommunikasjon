@@ -24,53 +24,21 @@ from barker_code import BARKER_BITS, BARKER_SYMBOLS
 class ModulationProtocol:
     def __init__(self, config: dict):
         """Initialize Message Protocol with given configuration."""
-
-        # Pre-computed parameters and values
         self.modulation_type = str(config['modulation']['type']).upper().strip()
-
         self.sps = int(config['modulation']['samples_per_symbol'])
 
-        self.correlation_threshold = float(config['receiver']['correlation_threshold'])
-        
-        self.noise_floor_dB = None  # To be set after SDR connection
 
-        self.barker_symbols = BARKER_SYMBOLS[13]  
-
-
-    # ================= Barker detection and message extraction =================
-    def detect_barker_sequence(self, received_symbols: np.array) -> int:
-        """
-        Detect Barker sequence in received bits.
-        Args:
-            received_symbols (np.array): Array of received symbols.
-        Returns:
-            int: Index of the start of the Barker sequence, or None if not found.
-        """
-
-        correlation = signal.correlate( received_symbols, self.barker_symbols, mode='valid', method='fft')
-        correlation_abs = np.abs(correlation)
-        peak_index = np.argmax(correlation_abs)
-        peak_value = correlation_abs[peak_index]
-
-        # TODO: Adjust threshold method to be relative to precalculated max correlation value
-        threshold = self.correlation_threshold * correlation_abs[peak_index]
-        if peak_value < threshold:
-            return None
-
-        return int(peak_index)
-    
     # ================= Upsampling and Downsampling =================
     def upsample_symbols(self, symbols: np.array) -> np.array:
         """Upsample symbols by repeating each symbol N times."""
-        return np.repeat(symbols, self.sps)
+        upsampled =  np.zeros(len(symbols) * self.sps, dtype=symbols.dtype)
+        upsampled[::self.sps] = symbols
+        return upsampled
     
     def downsample_symbols(self, symbols: np.array) -> np.array:
         """Downsample symbols by taking every N-th sample."""
         return symbols[::self.sps]
-    # ================= Set Noise Floor =================
-    def set_noise_floor_dB(self, noise_floor_dB: float):
-        """Set the noise floor in dB for adaptive thresholding."""
-        self.noise_floor_dB = noise_floor_dB
+    
     
     # ================= Modulation and Demodulation =================
     def modulate_message(self, message: Datagram) -> np.array:

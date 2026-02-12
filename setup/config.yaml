@@ -8,33 +8,33 @@ transmitter:
   tx_enable: True                    # Enable/disable transmitter
   tx_cyclic_buffer: True              # Enable/disable cyclic buffer
   tx_gain_dB: 0                      # range: -90 to 0 dB
-  tx_bandwidth: 7e6
+  tx_bandwidth: 500e3                 # TX bandwidth [Hz]
   tx_carrier: 866.5e6                 # TX local oscillator (carrier frequenzy)
   tx_buffer_size: 1024                # 2**10 samples 
 
 receiver: 
   rx_enable: True                     # Enable/disable receiver
   rx_gain_dB: 0                       # range: 0 to 73 dB
-  rx_bandwidth: 7e6
+  rx_bandwidth: 500e3                 # RX bandwidth [Hz]
   rx_carrier: 866.5e6                 # RX local oscillator (carrier frequenzy)
   gain_mode: 'manual'                 # "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
   buffer_size: 32768                  # 2**15 samples      
-  correlation_threshold: 0.8          # Correlation threshold for preamble detection (0.0 - 1.0)
 
 modulation:
   type: "bpsk"                        # Modulation type: "BPSK", "QPSK", More to come
-  symbol_rate: 250e3                  # Symbols per second
+  symbol_rate: 250e3                  # Symbols per second. symbol period = 1 / symbol_rate = 4 us
   samples_per_symbol: 8               # Samples per symbol
-  sample_rate: 1e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
+  sample_rate: 2e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
   rrc_roll_off: 0.5                   # Roll-off factor (alpha) for pulse shaping filter
-  rrc_filter_span: 10                 # RRC filter span in symbols
+  rrc_filter_span: 10                 # Filter span in symbols for RRC filter (total filter length = rrc_filter_span * samples_per_symbol)
   channel_coding_scheme: "hamming"    # Channel coding scheme: "hamming", More to come
   hamming_n: 15                        # Hamming code parameter n (total codeword length)
   hamming_k: 11                        # Hamming code parameter k (data length)
 
-preamble:
-  barker_code_length: 13              # Length of Barker code (choice: 7, 11 or 13)
-  preamble_length: 16                 # Length of preamble in bits
+barker_sequence:
+  code_length: 13                     # Length of Barker code (choice: 7, 11 or 13)
+  correlation_scale_factor_threshold: 1.2             # Correlation threshold for preamble detection. Scale factor to acknowledge signal peaks above the noise floor. Adjust based on observed noise levels and signal strength.
+
 
 framing:
   payload_size: 2                    # Payload size in bytes
