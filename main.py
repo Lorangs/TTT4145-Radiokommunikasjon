@@ -8,10 +8,10 @@ from modulate_datagram import ModulationProtocol
 from datagram import Datagram, msgType
 from sdr_transciever import SDRTransciever
 from queue import Queue, Empty
-from typing import Optional
 
 import os
 import sys
+import select
 import logging
 
 from yaml import safe_load
@@ -44,14 +44,15 @@ class SDRChatApp:
             raise e
 
         self.modulation_protocol = ModulationProtocol(config)
-        self.tui = ChatTUI()
+        self.tui = ChatTUI(max_display_messages=int(config['radio']['display_number_of_messages']))
         self.sdr = SDRTransciever(config)
 
-        self.running: Optional[threading.Thread] = False
-        self.rx_thread: Optional[threading.Thread] = None
-        self.tx_thread: Optional[threading.Thread] = None
-        self.tui_thread: Optional[threading.Thread] = None
+        self.running: bool = False
+        self.rx_thread: threading.Thread = None
+        self.tx_thread: threading.Thread = None
+        self.tui_thread: threading.Thread = None
         self.shutdown_event = threading.Event()
+        self.tui_refresh_event = threading.Event()
 
         self.tx_queue: Queue[Datagram] = Queue(maxsize=32)  # Queue for outgoing messages
         self.rx_queue: Queue[Datagram] = Queue(maxsize=32)  # Queue for incoming messages
@@ -113,12 +114,13 @@ class SDRChatApp:
         """Start the SDR Chat Application."""
         if not self.sdr.connect():
             logging.debug("Failed to connect to SDR. Cannot start application.")
-            #return False
-        noiser_flor_dB = 10*np.log10(np.mean(self.sdr.sdr.rx()))
-        logging.info(f"SDR connected successfully. Noise floor: {noiser_flor_dB:.2f} dB")
 
-        self.modulation_protocol.set_noise_floor_dB(noiser_flor_dB)
         self.running = True
+            #return False
+        #noiser_flor_dB = 10*np.log10(np.mean(self.sdr.sdr.rx()))
+        #logging.info(f"SDR connected successfully. Noise floor: {noiser_flor_dB:.2f} dB")
+
+        #self.modulation_protocol.set_noise_floor_dB(noiser_flor_dB)
 
         self.rx_thread = threading.Thread(target=self._rx_loop, daemon=True, name="RX_Thread")
         self.tx_thread = threading.Thread(target=self._tx_loop, daemon=True, name="TX_Thread")
@@ -133,24 +135,27 @@ class SDRChatApp:
         return True
     
     
-    def send_ack(self):
-        """Send an ACK datagram."""
-        self.tx_queue.put(Datagram(msg_type=msgType.ACK))
-        logging.info("Sent ACK datagram.")
-
-    def send_datagram(self, payload: str = "", msg_type: msgType = msgType.DATA) -> bool:
-        """Enqueue a datagram for transmission."""
+    def send_ack(self, msg_id: np.uint8):
+        """Send an ACK for the recieved datagram carrying its msg_id."""
         try:
-        
-            datagram = Datagram.from_string(payload, msg_type=msg_type)
-
-            self.tx_queue.put(datagram, timeout=1)
-            self.tui.add_message(datagram)  # Add sent message to TUI display
-            logging.info(f"Enqueued datagram for transmission: {datagram}")
+            ack_datagram = Datagram.from_ack(msg_id=msg_id)
+            self.tx_queue.put(ack_datagram)
+            logging.info(f"Enqueue ACK for transmission.\tmsg_ID: {msg_id}")
             return True
         
         except Exception as e:
-            logging.error(f"Failed to enqueue datagram: {e}")
+            logging.error(f"Failed to enqueue ACK datagram ID {msg_id}: {e}")
+            return False
+
+    def send_datagram(self, datagram: Datagram) -> bool:
+        """Enqueue a datagram for transmission."""
+        try:
+            self.tx_queue.put(datagram, timeout=1)
+            logging.info(f"Enqueued datagram for transmission.\tmsg_ID: {datagram.get_msg_id}")
+            return True 
+        
+        except Exception as e:
+            logging.error(f"Failed to enqueue datagram ID {datagram.get_msg_id}: {e}")
             return False
         
 
@@ -161,6 +166,8 @@ class SDRChatApp:
         while self.running:
             try:
                 received_signal = self.sdr.sdr.rx()
+
+                #filtered_signal = self.modulation_protocol.apply_rx_filter(received_signal)
 
                 barker_index = self.modulation_protocol.detect_barker_sequence(received_signal)
 
@@ -175,9 +182,14 @@ class SDRChatApp:
                         continue
 
                     self.rx_queue.put(received_message)
-                    logging.info(f"Received datagram: {received_message}")
+                    self.tui_refresh_event.set()  # Signal TUI to refresh display
                     if received_message.msg_type == msgType.DATA:
-                        self.send_ack()
+                        logging.info(f"Received datagram: {received_message}")
+                        self.send_ack(received_message.get_msg_id)
+                        self.chat_history_log(f"Received: [ID:{received_message.get_msg_id}]\t{received_message.get_payload.tobytes().decode('utf-8', errors='replace')}")
+                    else:
+                        logging.info(f"Received ACK for msg_ID: {received_message.get_msg_id}")
+                        self.chat_history_log(f"Received: [ID:{received_message.get_msg_id}]\tACK")
                         
            
                     
@@ -195,9 +207,9 @@ class SDRChatApp:
         while self.running:
             try:
                 datagram: Datagram = self.tx_queue.get(timeout=0.1)  # Wait for message to send
-                modulated_signal = self.modulation_protocol.modulate_message(datagram)
+                #modulated_signal = self.modulation_protocol.modulate_message(datagram)
                 #self.sdr.sdr.tx(modulated_signal)
-                logging.info(f"Transmitted datagram: {datagram}")
+                logging.info(f"Transmitted datagram: {datagram.get_msg_id}")
             except Empty:
                 time.sleep(0.1)  # No message to send, sleep briefly
                 continue  # No message to send, continue loop
@@ -211,14 +223,28 @@ class SDRChatApp:
     def _tui_loop(self):
         """TUI loop - continuously check for user input and enqueue messages to send."""
         logging.info("TUI loop started.")
+
+        self.tui.render_screen()  # Initial render of TUI
+
         while self.running:
             try:
-                self.tui._render_screen()  # Update TUI display
 
-                user_input = input("> ")
+                # Wait for either: screen refresh event OR stdin input (max 0.5s timeout)
+                ready_to_read, _, _ = select.select([sys.stdin], [], [], 0.1)
+                
+                if self.tui_refresh_event.is_set():
+                    while not self.rx_queue.empty():
+                        try:
+                            received_datagram: Datagram = self.rx_queue.get_nowait()
+                            self.tui.add_message(received_datagram)
+                            logging.debug(f"TUI processed received datagram ID: {received_datagram.get_msg_id}")
+                        except Empty:
+                            break  # No more messages to process
+                    self.tui.render_screen()  # Update TUI display
+                    self.tui_refresh_event.clear()  # Reset event
 
-                if user_input is not None:
-                    user_input = user_input.strip()
+                if ready_to_read:
+                    user_input = sys.stdin.readline().strip()
                     if user_input.lower() == "/quit":
                         logging.info("User requested to quit. Stopping application...")
                         self.running = False
@@ -227,9 +253,14 @@ class SDRChatApp:
                         logging.warning(f"Unknown command: {user_input}")
                         continue  # Ignore unknown commands
 
-                    self.send_datagram(user_input, msg_type=msgType.DATA)
-                
+                    # send message as datagram
+                    datagram = Datagram.from_string(user_input, msg_type=msgType.DATA)
+                    self.send_datagram(datagram)
+                    self.tui.add_message(datagram)  # Add sent message to TUI display
+                    self.tui.render_screen()  # Update TUI display after sending message
+                    self.chat_history_log(f"Sent: [ID:{datagram.get_msg_id}]\t{user_input}")
 
+      
             except Exception as e:
                 logging.error(f"Error in TUI loop: {e}")
                 continue
@@ -238,6 +269,13 @@ class SDRChatApp:
 
         logging.info("TUI loop stopped.")
 
+    def chat_history_log(self, message: str):
+        """Append a message to the chat history log file."""
+        try:
+            with open(self.log_file, 'a') as f:
+                f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
+        except Exception as e:
+            logging.error(f"Error writing to chat history log: {e}")
 
     def _setup_logging(self, debug_mode: str='INFO'):
         """Setup Python's built-in logging system"""

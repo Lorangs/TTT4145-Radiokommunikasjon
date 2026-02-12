@@ -36,6 +36,48 @@ class StaticSDRPlotter:
         """Destructor to clean up resources."""
         plt.close('all')
     
+    def plot_filter_response(self,
+                                coefficients: np.ndarray,
+                                time_vector: np.ndarray,
+                                sample_rate: float,
+                                title: str = "Filter Impulse and Frequency Response",
+                                figsize: Tuple[int, int] = (12, 6)) -> Optional[Figure]:
+        """Plot the impulse response and frequency response of a filter.
+        
+        Args:
+            coefficients: Filter coefficients
+            time_vector: Time vector corresponding to coefficients
+            sample_rate: Sample rate in Hz
+            title: Plot title
+            figsize: Figure size
+        """
+        try:
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize)
+            
+            # Impulse response
+            ax1.plot(time_vector, coefficients, linewidth=0.8)
+            ax1.set_xlabel('Time (s)', fontsize=10)
+            ax1.set_ylabel('Amplitude', fontsize=10)
+            ax1.set_title(f"{title} - Impulse Response", fontsize=12)
+            ax1.grid(True, alpha=0.3)
+            
+            # Frequency response
+            w, h = signal.freqz(coefficients, worN=512)
+            freqs = w * sample_rate / (2 * np.pi) / 1e6  # Convert to MHz
+            h_db = 20 * np.log10(np.abs(h) + 1e-12)  # Convert to dB
+            
+            ax2.plot(freqs, h_db, linewidth=0.8)
+            ax2.set_xlabel('Frequency (MHz)', fontsize=10)
+            ax2.set_ylabel('Magnitude (dB)', fontsize=10)
+            ax2.set_title(f"{title} - Frequency Response", fontsize=12)
+            ax2.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            return fig
+        except Exception as e:
+            print(f"Unexpected error in plot_filter_response: {e}")
+            return None
+
 
     def plot_time_domain(self, 
                         samples: np.ndarray, 

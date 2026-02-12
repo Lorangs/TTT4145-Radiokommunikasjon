@@ -2,6 +2,7 @@ radio:
   ip_address: "ip:192.168.0.151"      # ip address of sdr radio
   rrc_filter: "setup/rrc_filter.ftr"        # Path to RRC filter coefficients file
   log_level: "DEBUG"                 # Log Level: "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
+  display_number_of_messages: 20         # Number of messages to display in TUI
 
 transmitter:
   tx_enable: True                    # Enable/disable transmitter
@@ -9,7 +10,7 @@ transmitter:
   tx_gain_dB: 0                      # range: -90 to 0 dB
   tx_bandwidth: 7e6
   tx_carrier: 866.5e6                 # TX local oscillator (carrier frequenzy)
-
+  tx_buffer_size: 1024                # 2**10 samples 
 
 receiver: 
   rx_enable: True                     # Enable/disable receiver
