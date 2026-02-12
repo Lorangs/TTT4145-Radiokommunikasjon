@@ -9,6 +9,14 @@ from yaml import safe_load
 from matplotlib.pyplot import plot, show, stem
 import numpy as np
 
+import adi
+import os
+import sys
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(parent_dir)
+from sdr_plots import StaticSDRPlotter
+
+
 try: 
     with open("setup/config.yaml", 'r') as f:
         config = safe_load(f)
@@ -16,8 +24,42 @@ except Exception as e:
     print(f"Error loading config file: {e}")
     raise e
 
+
+def try_filter_in_sdr():
+    """Test if the generated filter can be loaded into the SDR."""
+    try:
+        sdr = adi.Pluto(config['radio']['ip_address'])
+
+    # Configure TX
+        sdr.tx_rf_bandwidth = int(float(config['transmitter']['tx_bandwidth']))
+        sdr.tx_lo = int(float(config['transmitter']['tx_carrier']))
+        sdr.tx_hardwaregain_chan0 = int(float(config['transmitter']['tx_gain_dB']))
+        sdr.sample_rate = int(float(config['modulation']['sample_rate']))
+        sdr.tx_cyclic_buffer = bool(config['transmitter']['tx_cyclic_buffer'])
+        sdr._tx_buffer_size
+
+        # Configure RX
+
+        sdr.rx_rf_bandwidth = int(float(config['receiver']['rx_bandwidth']))
+        sdr.rx_lo = int(float(config['receiver']['rx_carrier']))
+        sdr.rx_buffer_size = int(config['receiver']['buffer_size'])
+        sdr.gain_control_mode_chan0 = config['receiver']['gain_mode']
+        if config['receiver']['gain_mode'] == 'manual':
+            sdr.rx_hardwaregain_chan0 = float(config['receiver']['rx_gain_dB'])
+
+        # set TX and RX filter
+        sdr.filter = config['radio']['rrc_filter']
+
+        print(len(sdr.rx()))
+
+    except Exception as e:
+        print(f"Error connecting to SDR: {e}")
+        exit(1)
+
 def rrc_filter(config_file: str ="config.yaml") -> tuple[np.ndarray, np.ndarray]:
     """Generate Root Raised Cosine (RRC) filter based on configuration."""
+
+    sdr = config['radio']['sdr']
 
     rolloff = float(config['modulation']['rrc_roll_off'])
     span = int(config['modulation']['rrc_filter_span'])
@@ -55,5 +97,4 @@ def write_filter_to_file(rrc_taps, filename: str = "rrc_filter.ftr"):
         raise e
     
 if __name__ == "__main__":
-    t, rrc_taps = rrc_filter()
-    write_filter_to_file(rrc_taps)
+    try_filter_in_sdr()
