@@ -17,8 +17,8 @@ Generated signal of modulated symbols are recieved / transmitted by SDR transcie
 
 import numpy as np
 from datagram import msgType, Datagram
-import yaml
 from scipy import signal
+from barker_code import BARKER_BITS, BARKER_SYMBOLS
 
 
 class ModulationProtocol:
@@ -28,9 +28,11 @@ class ModulationProtocol:
         # Pre-computed parameters and values
         self.modulation_type = str(config['modulation']['type']).upper().strip()
 
+        self.sps = int(config['modulation']['samples_per_symbol'])
+
         self.correlation_threshold = float(config['receiver']['correlation_threshold'])
 
-        #self.barker_energy = np.sqrt(np.sum(np.abs(self.barker_bits)**2))
+        self.barker_symbols = BARKER_SYMBOLS[13]  
 
 
     # ================= Barker detection and message extraction =================
@@ -55,9 +57,17 @@ class ModulationProtocol:
 
         return int(peak_index)
     
+    # ================= Upsampling and Downsampling =================
+    def upsample_symbols(self, symbols: np.array) -> np.array:
+        """Upsample symbols by repeating each symbol N times."""
+        return np.repeat(symbols, self.sps)
+    
+    def downsample_symbols(self, symbols: np.array) -> np.array:
+        """Downsample symbols by taking every N-th sample."""
+        return symbols[::self.sps]
+
     
     # ================= Modulation and Demodulation =================
-        
     def modulate_message(self, message: Datagram) -> np.array:
         """Placeholder for modulation function based on modulation type."""
         
@@ -167,25 +177,7 @@ if __name__ == "__main__":
     noise = noise_I + 1j*noise_Q
     modulated_symbols = modulated_symbols + noise
 
-
-    plotter.plot_constellation(modulated_symbols, title="Received Symbols with Noise - Constellation")
-
-    barker_delay = msg_protocol.detect_barker_sequence(modulated_symbols)
-    print(f"Barker Delay Index: {barker_delay}")
-
-    stripped_symbols = msg_protocol.strip_barker_preamble(modulated_symbols, barker_delay)
-    print(f"Stripped Symbols: {stripped_symbols}")
-
-    demodulated_message = msg_protocol.demodulate_message(stripped_symbols)
-    print(f"Demodulated Message: {demodulated_message}")
-
-    parsed_type, parsed_payload = msg_protocol.parse_message(demodulated_message)
-    print(f"Parsed Message Type: {parsed_type}, Payload: {parsed_payload}")
-
+    plotter.plot_constellation(modulated_symbols, title="Received Symbols with Noise")
     show()
-
-
-
-
 
 

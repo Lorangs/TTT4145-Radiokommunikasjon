@@ -2,7 +2,7 @@ import numpy as np
 from dataclasses import dataclass
 
 
-from barker_code import get_barker_bitstream
+from barker_code import BARKER_BITS
 
 from enum import Enum
 
@@ -20,13 +20,13 @@ class Datagram():
         - payload: variable length np.uint8 array
         - crc16: 2 bytes (CRC16 checksum of header + payload)
     """
-    _barker_code: bytes
+    _barker_code: np.uint16
     _msg_type: msgType
     _payload_size: np.uint8
     _payload: np.ndarray
     _crc16: np.uint16
 
-    def __init__(self, msg_type: msgType = msgType.DATA, payload: np.ndarray = np.array([], dtype=np.uint8)):
+    def __init__(self, msg_type: msgType = msgType.DATA, payload: np.ndarray = np.array([], dtype=np.uint8), barker_length: int = 13):
         """Initialize datagram with payload and message type. Automatically computes CRC16 checksum.
             Args:
                 msg_type (msgType): Type of message (DATA or ACK).
@@ -36,19 +36,18 @@ class Datagram():
         if len(payload) > 255:
             raise ValueError("Payload size exceeds maximum of 255 bytes.")
         
-        self._barker_code = get_barker_bitstream(13).tobytes()  # Use 13-bit Barker code as preamble
+        self._barker_code = BARKER_BITS[barker_length]
         self._msg_type = msg_type        
         self._payload_size = np.uint8(len(payload))
         self._payload = payload
 
         # compute CRC16 checksum over all fields
         self._crc16 = self.compute_crc16((
-            self._barker_code + 
+            self._barker_code.tobytes() +
             bytes([self._msg_type.value]) + 
             bytes([self._payload_size]) + 
             self._payload.tobytes())
             )
-        
         
     @classmethod
     def from_string(cls, text: str, msg_type: msgType = msgType.DATA, encoding: str = 'utf-8') -> 'Datagram':
@@ -83,7 +82,7 @@ class Datagram():
 
     def pack(self) -> bytes:
         """Pack datagram into a single numpy array of uint8."""
-        return (self._barker_code + 
+        return (self._barker_code.tobytes() + 
                 bytes([self._msg_type.value]) + 
                 bytes([self._payload_size]) + 
                 self._payload.tobytes() + 
@@ -106,11 +105,10 @@ class Datagram():
         instance = cls.__new__(cls)
         
         # parse fields
+        expected_barker = BARKER_BITS[13].tobytes()  # Expected Barker code for validation
         instance._barker_code = np.frombuffer(data[:2], dtype=np.uint8).tobytes()
-        expected_barker = get_barker_bitstream(13).tobytes()
         if instance._barker_code != expected_barker:
-            raise ValueError("Barker code does not match, data may be corrupted.")
-
+            raise ValueError("Barker code does not match expected preamble, data may be corrupted.")
 
         instance._msg_type = msgType(data[2])
         instance._payload_size = data[3]
@@ -136,6 +134,11 @@ class Datagram():
         return instance
     
     @staticmethod
+    def get_barker_code(self) -> np.uint16:
+        """Get the Barker code used in the datagram."""
+        return self._barker_code
+    
+    @staticmethod
     def compute_crc16(data: bytes) -> np.uint16:
         """Compute CRC16 checksum."""
         crc = 0xFFFF
@@ -149,27 +152,27 @@ class Datagram():
         return crc
         
     @property
-    def payload(self) ->  np.ndarray:
+    def get_payload(self) ->  np.ndarray:
         """Get payload data."""
         return self._payload
 
     @property
-    def msg_type(self) -> msgType:
+    def get_msg_type(self) -> msgType:
         """Get message type."""
         return self._msg_type
     
     @property
-    def crc16(self) -> np.uint16:
+    def get_crc16(self) -> np.uint16:
         """Get CRC16 checksum."""
         return self._crc16
     
     @property
-    def payload_size(self) -> int:
+    def get_payload_size(self) -> int:
         """Get payload size."""
         return int(self._payload_size)
     
     @property
-    def total_size(self) -> int:
+    def get_total_size(self) -> int:
         """Get total size of the datagram in bytes."""
         return len(self.pack())
     
@@ -183,7 +186,7 @@ class Datagram():
 if __name__ == "__main__":
     # Example usage
     payload = np.array([1, 2, 3, 4], dtype=np.uint8)
-    datagram = Datagram(payload, msg_type=msgType.DATA)
+    datagram = Datagram(msg_type=msgType.DATA, payload=payload)
     packed_data = datagram.pack()
     print(f"Packed data: {packed_data}")
     unpacked_datagram = Datagram.unpack(packed_data)

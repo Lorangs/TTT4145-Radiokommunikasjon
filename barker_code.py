@@ -6,53 +6,26 @@ The codes are packed into bytes for transmission and can be unpacked back to bit
 All Barker codes are padded to 16 bits (2 bytes) for uniformity in storage and transmission, with unused bits set to zero.
 """
 
-import numpy as np
+from numpy import uint16, array, int8
 
-# Barker codes packed into bytes for transmission (2 bytes = 16 bits)
-BARKER_CODES = {
-    7: np.packbits(np.array([1, 1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], dtype=np.uint8)),
-    11: np.packbits(np.array([1, 1, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0], dtype=np.uint8)),
-    13: np.packbits(np.array([1, 1, 1, 1, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 0, 0], dtype=np.uint8)) 
+BARKER_BITS = {
+    7: uint16(0b1110001000000000),   # Barker code of length 7, padded to 16 bits
+    11: uint16(0b1110000100100000),  # Barker code of length 11, padded to 16 bits
+    13: uint16(0b1111100110101000)   # Barker code of length 13, padded to 16 bits
 }
 
-def generate_barker_code(length: int) -> np.ndarray:
-    """Generate Bipolar Barker code of specified length.
-    Args:
-        length (int): Length of the desired Barker code. Range 2 - 13.
-
-    Returns:
-        array: Barker code as a numpy array of bits , or None if length is invalid.
-    """
-    
-    packed_code = BARKER_CODES.get(length)
-    if packed_code is None:
-        raise ValueError(f"Invalid Barker code length: {length}")
-    
-    # Unpack the bytes back to bits, extracting only the relevant bits
-    return np.unpackbits(np.frombuffer(packed_code.tobytes(), dtype=np.uint8), bitorder='big')
-
-def get_barker_bitstream(length: int) -> np.uint16:
-    """Get the bitstream representation of a Barker code.
-    
-    Args:
-        length: Length of Barker code (7, 11, or 13)
-        
-    Returns:
-        np.ndarray: Bitstream as array of 0s and 1s (only actual code bits)
-    """
-    packed_code = generate_barker_code(length)
-    packed_code = BARKER_CODES.get(length)
-    if packed_code is None:
-        raise ValueError(f"Invalid Barker code length: {length}")
-    
-    # Convert 2-byte array to uint16 (big-endian)
-    return np.uint16(int.from_bytes(packed_code.tobytes(), byteorder='big'))
+BARKER_SYMBOLS = {
+    7: array([1, 1, 1, -1, -1, 1, -1], dtype=int8),
+    11: array([1, 1, 1, -1, -1, -1, 1, -1, -1, 1, -1], dtype=int8),
+    13: array([1, 1, 1, 1, 1, -1, -1, 1, 1, -1, 1, -1, 1], dtype=int8) 
+}
 
 
 
 if __name__ == "__main__":
     for length in [7, 11, 13]:
-        barker_code = generate_barker_code(length)
-        bitstream = get_barker_bitstream(length)
-        print(f"Barker code (packed) of length {length}:\t{barker_code}")
-        print(f"Barker code (bitstream) of length {length}:\t{bitstream}\n")
+        bit_sequence = BARKER_BITS.get(length)
+        symbols = BARKER_SYMBOLS.get(length)
+        print(f"Barker code length: {length}")
+        print(f"Bit sequence (hex): {bit_sequence:04x}")
+        print(f"Symbols: {symbols}\n")

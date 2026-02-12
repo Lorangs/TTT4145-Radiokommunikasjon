@@ -1,7 +1,7 @@
 radio:
   ip_address: "ip:192.168.0.151"      # ip address of sdr radio
   rrc_filter: "setup/rrc_filter.ftr"        # Path to RRC filter coefficients file
-  debug_mode: "DEBUG"                 # Log Level: "DEBUG", "INFO"
+  log_level: "DEBUG"                 # Log Level: "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
 
 transmitter:
   tx_enable: True                    # Enable/disable transmitter
@@ -21,15 +21,18 @@ receiver:
   correlation_threshold: 0.8          # Correlation threshold for preamble detection (0.0 - 1.0)
 
 modulation:
-  type: "qpsk"                        # Modulation type: "BPSK", "QPSK", More to come
+  type: "bpsk"                        # Modulation type: "BPSK", "QPSK", More to come
   symbol_rate: 250e3                  # Symbols per second
   samples_per_symbol: 8               # Samples per symbol
   sample_rate: 1e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
   rrc_roll_off: 0.5                   # Roll-off factor (alpha) for pulse shaping filter
   rrc_filter_span: 10                 # RRC filter span in symbols
+  channel_coding_scheme: "hamming"    # Channel coding scheme: "hamming", More to come
+  hamming_n: 15                        # Hamming code parameter n (total codeword length)
+  hamming_k: 11                        # Hamming code parameter k (data length)
 
 preamble:
-  barker_code_length: 7               # Length of Barker code (choice: 7, 11 or 13)
+  barker_code_length: 13              # Length of Barker code (choice: 7, 11 or 13)
   preamble_length: 16                 # Length of preamble in bits
 
 framing:

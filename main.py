@@ -34,7 +34,7 @@ class SDRChatApp:
 
         self.log_file = os.path.join(log_dir, f"{datetime.now().date()}-chat-history.txt")
         self.debug_file = os.path.join(log_dir, f"{datetime.now().date()}-debug.log")
-        self._setup_logging(str(config['radio']['debug_mode']).upper().strip())
+        self._setup_logging(str(config['radio']['log_level']).upper().strip())
 
         try:
             with open(self.log_file, 'a') as f:
@@ -52,7 +52,6 @@ class SDRChatApp:
         self.tx_thread: Optional[threading.Thread] = None
         self.tui_thread: Optional[threading.Thread] = None
         self.shutdown_event = threading.Event()
-
 
         self.tx_queue: Queue[Datagram] = Queue(maxsize=32)  # Queue for outgoing messages
         self.rx_queue: Queue[Datagram] = Queue(maxsize=32)  # Queue for incoming messages
