@@ -31,6 +31,8 @@ class ModulationProtocol:
         self.sps = int(config['modulation']['samples_per_symbol'])
 
         self.correlation_threshold = float(config['receiver']['correlation_threshold'])
+        
+        self.noise_floor_dB = None  # To be set after SDR connection
 
         self.barker_symbols = BARKER_SYMBOLS[13]  
 
@@ -65,7 +67,10 @@ class ModulationProtocol:
     def downsample_symbols(self, symbols: np.array) -> np.array:
         """Downsample symbols by taking every N-th sample."""
         return symbols[::self.sps]
-
+    # ================= Set Noise Floor =================
+    def set_noise_floor_dB(self, noise_floor_dB: float):
+        """Set the noise floor in dB for adaptive thresholding."""
+        self.noise_floor_dB = noise_floor_dB
     
     # ================= Modulation and Demodulation =================
     def modulate_message(self, message: Datagram) -> np.array:
