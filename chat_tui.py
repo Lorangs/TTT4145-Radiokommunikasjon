@@ -41,7 +41,7 @@ class ChatTUI:
         print("=" * 80)
         print(" " * 25 + "RadioGram Chat Application")
         print("=" * 80)
-        print("Commands: /quit to exit, /export to save chat history")
+        print("Commands: /quit to exit.")
         
     def add_message(self, datagram: Datagram):
         """Add a message to the chat display

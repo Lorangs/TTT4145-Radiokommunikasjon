@@ -23,6 +23,16 @@ class BarkerDetector:
             return None
         return int(peak_index)
     
+    def add_barker_code(self, signal: np.array) -> np.array:
+        """Prepend Barker code to the middle of the signal."""
+        barker_start_index = len(signal) // 2
+        return np.concatenate((signal[:barker_start_index], self.barker_code, signal[barker_start_index:]))
+    
+    def remove_barker_code(self, signal: np.array, barker_index_start: int) -> np.array:
+        """Remove Barker code from the signal given the starting index of the Barker code."""
+        barker_length = len(self.barker_code)
+        return np.concatenate((signal[:barker_index_start], signal[barker_index_start+barker_length:]))
+    
 if __name__ == "__main__":
 
     from yaml import safe_load

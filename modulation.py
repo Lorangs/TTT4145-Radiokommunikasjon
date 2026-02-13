@@ -19,6 +19,7 @@ import numpy as np
 from datagram import msgType, Datagram
 from scipy import signal
 from barker_code import BARKER_BITS, BARKER_SYMBOLS
+import logging
 
 
 class ModulationProtocol:

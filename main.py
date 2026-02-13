@@ -1,3 +1,15 @@
+"""
+To display logging file in a terminal with color coding, use the following command:
+tail -f log/$(date +%Y-%m-%d)-debug.log
+
+optionally pipe with grep:
+| grep --color=always "ERROR\|WARNING\|INFO\|DEBUG"
+
+to filter for specific log levels while keeping color coding.
+
+"""
+
+
 
 
 import threading
@@ -10,6 +22,7 @@ from sdr_transciever import SDRTransciever
 from rrc_filter import RRCFilter
 from barker_detection import BarkerDetector
 from queue import Queue, Empty
+from synchronize import Synchronizer
 
 import os
 import sys
@@ -31,12 +44,15 @@ class SDRChatApp:
             print(f"Error loading config file: {e}")
             raise e
 
+        self.config = config
+
         # Initialize Modules with configuration
         self.modulation_protocol = ModulationProtocol(config)
         self.matched_filter = RRCFilter(config)
         self.tui = ChatTUI(config)
-        self.sdr = SDRTransciever(config)
         self.barker_detector = BarkerDetector(config)
+        self.synchronizer = Synchronizer(config)
+        self.sdr = SDRTransciever(config)
 
         # Threading and synchronization primitives
         self.running: bool = False
@@ -88,6 +104,13 @@ class SDRChatApp:
                         break
 
             logging.info("SDR Chat Application resources cleaned up.")
+
+            # delete filter file if it exists
+            if hasattr(self.matched_filter, 'hardware_filter_enabled') and self.matched_filter.hardware_filter_enabled:
+                filter_file = self.config['radio']['rrc_filter']
+                if os.path.exists(filter_file):
+                    os.remove(filter_file)
+                    logging.info(f"Deleted temporary filter file: {filter_file}")
         except Exception as e:
             logging.error(f"Error during application cleanup: {e}")
 
@@ -122,12 +145,10 @@ class SDRChatApp:
 
     def start(self):
         """Start the SDR Chat Application."""
-        if self.sdr.connect():   
-            noiser_flor_dB = 20*np.log10(np.mean(self.sdr.sdr.rx()))
-            self.barker_detector.set_noise_floor_dB(noiser_flor_dB)
-            logging.info(f"SDR Noise floor: {noiser_flor_dB:.2f} dB")
+        if self.sdr.connect():  
+            self.barker_detector.set_noise_floor_dB(self.sdr.measure_noise_floor_dB())
         else:
-            logging.debug("Failed to connect to SDR. Cannot start application.")
+            logging.debug("Failed to connect to SDR.")
 
         self.running = True
         self.rx_thread = threading.Thread(target=self._rx_loop, daemon=True, name="RX_Thread")
@@ -138,16 +159,16 @@ class SDRChatApp:
         self.tx_thread.start()
         self.tui_thread.start()
 
-        logging.info("SDR Chat Application started successfully.")
+        logging.info("Chat Application started successfully.")
 
         return True
     
     
     # ================= Message Handling =================
-    def send_ack(self, msg_id: np.uint8):
+    def queue_ack(self, msg_id: np.uint8):
         """Send an ACK for the recieved datagram carrying its msg_id."""
         try:
-            ack_datagram = Datagram.from_ack(msg_id=msg_id)
+            ack_datagram = Datagram.as_ack(msg_id=msg_id)
             self.tx_queue.put(ack_datagram)
             logging.info(f"Enqueue ACK for transmission.\tmsg_ID: {msg_id}")
             return True
@@ -156,7 +177,7 @@ class SDRChatApp:
             logging.error(f"Failed to enqueue ACK datagram ID {msg_id}: {e}")
             return False
 
-    def send_datagram(self, datagram: Datagram) -> bool:
+    def queue_datagram(self, datagram: Datagram) -> bool:
         """Enqueue a datagram for transmission."""
         try:
             self.tx_queue.put(datagram, timeout=1)
@@ -167,6 +188,15 @@ class SDRChatApp:
             logging.error(f"Failed to enqueue datagram ID {datagram.get_msg_id}: {e}")
             return False
         
+    def send_signal(self, signal: np.array):
+        """Send a raw signal through the SDR immediately."""
+        try:
+            self.sdr.sdr.tx_destroy_buffer()  # Clear any existing data in the SDR's transmission buffer
+            self.sdr.sdr.tx(signal)
+        except Exception as e:
+            raise Exception(f"Failed to send signal through SDR: {e}")
+            
+        
     # ================= Callback loops for threads =================
     def _rx_loop(self):
         """Receive loop - continuously receive data from SDR and process it."""
@@ -176,13 +206,21 @@ class SDRChatApp:
             try:
                 received_signal = self.sdr.sdr.rx()
 
-                #filtered_signal = self.modulation_protocol.apply_rx_filter(received_signal)
+                if self.matched_filter.hardware_filter_enabled:
+                    filtered_signal = received_signal  # Assume hardware filtering is applied by the SDR
+                else:
+                    filtered_signal = self.matched_filter.apply_filter(received_signal)
 
-                barker_index = self.modulation_protocol.detect_barker_sequence(received_signal)
+                synchronized_signal = self.synchronizer.synchronize(filtered_signal)
+
+                decimated_signal = self.modulation_protocol.downsample_symbols(synchronized_signal)
+
+                barker_index = self.barker_detector.detect(received_signal)
 
                 if barker_index is not None:
                     try:
-                        received_message = self.modulation_protocol.demodulate_message(received_signal[barker_index:])
+                        recieved_signal = self.barker_detector.remove_barker_code(received_signal, barker_index)
+                        received_message = self.modulation_protocol.demodulate_message(recieved_signal)
                     except ValueError as e:
                         logging.warning(f"Message demodulation failed: {e}")
                         continue
@@ -194,7 +232,7 @@ class SDRChatApp:
                     self.tui_refresh_event.set()  # Signal TUI to refresh display
                     if received_message.msg_type == msgType.DATA:
                         logging.info(f"Received datagram: {received_message}")
-                        self.send_ack(received_message.get_msg_id)
+                        self.queue_ack(received_message.get_msg_id)
                         self.chat_history_log(f"Received: [ID:{received_message.get_msg_id}]\t{received_message.get_payload.tobytes().decode('utf-8', errors='replace')}")
                     else:
                         logging.info(f"Received ACK for msg_ID: {received_message.get_msg_id}")
@@ -216,8 +254,20 @@ class SDRChatApp:
         while self.running:
             try:
                 datagram: Datagram = self.tx_queue.get(timeout=0.1)  # Wait for message to send
-                #modulated_signal = self.modulation_protocol.modulate_message(datagram)
-                #self.sdr.sdr.tx(modulated_signal)
+
+                modulated_signal = self.modulation_protocol.modulate_message(datagram)
+
+                signal_with_barker = self.barker_detector.add_barker_code(modulated_signal)
+
+                upsampled_signal = self.modulation_protocol.upsample_symbols(signal_with_barker)
+
+                if self.matched_filter.hardware_filter_enabled:
+                    filtered_signal = upsampled_signal  # Assume hardware filtering is applied by the SDR
+                else:
+                    filtered_signal = self.matched_filter.apply_filter(upsampled_signal)
+
+                self.send_signal(filtered_signal)
+
                 logging.info(f"Transmitted datagram: {datagram.get_msg_id}")
             except Empty:
                 time.sleep(0.1)  # No message to send, sleep briefly
@@ -263,8 +313,8 @@ class SDRChatApp:
                         continue  # Ignore unknown commands
 
                     # send message as datagram
-                    datagram = Datagram.from_string(user_input, msg_type=msgType.DATA)
-                    self.send_datagram(datagram)
+                    datagram = Datagram.as_string(user_input, msg_type=msgType.DATA)
+                    self.queue_datagram(datagram)
                     self.tui.add_message(datagram)  # Add sent message to TUI display
                     self.tui.render_screen()  # Update TUI display after sending message
                     self.chat_history_log(f"Sent: [ID:{datagram.get_msg_id}]\t{user_input}")
@@ -279,7 +329,7 @@ class SDRChatApp:
         logging.info("TUI loop stopped.")
 
         
-    # ================= Logging ===================
+    # ================= =================Logging ======================================
     def chat_history_log(self, message: str):
         """Append a message to the chat history log file."""
         try:
@@ -328,7 +378,8 @@ class SDRChatApp:
         # Configure root logger
         logging.basicConfig(
             level=logging.DEBUG,  # Capture all levels
-            handlers=[file_handler]
+            handlers=[file_handler],
+            force=True  # Ensure that logging configuration is applied even if logging was previously configured
         )
 
         logging.info("\n\n--- New Application Session Started ---")
@@ -356,3 +407,4 @@ if __name__ == "__main__":
         app.running = False
        
     app.stop()
+    del app

@@ -1,19 +1,18 @@
 radio:
   ip_address: "ip:192.168.0.151"      # ip address of sdr radio
-  rrc_filter: "setup/rrc_filter.ftr"        # Path to RRC filter coefficients file
   log_level: "DEBUG"                 # Log Level: "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
   display_number_of_messages: 20         # Number of messages to display in TUI
+  rrc_filter_enable: False              # Enable/disable hardware RRC filtering on the SDR. If False, RRC filtering is done in software.
+  rrc_filter: "rrc_filter_coefficients.ftr"  # File to store RRC filter coefficients for hardware filtering. Only used if rrc_filtering_enable is True.
 
 transmitter:
-  tx_enable: True                    # Enable/disable transmitter
-  tx_cyclic_buffer: True              # Enable/disable cyclic buffer
+  tx_cyclic_buffer: False            # Enable/disable cyclic buffer
   tx_gain_dB: 0                      # range: -90 to 0 dB
   tx_bandwidth: 500e3                 # TX bandwidth [Hz]
   tx_carrier: 866.5e6                 # TX local oscillator (carrier frequenzy)
   tx_buffer_size: 1024                # 2**10 samples 
 
 receiver: 
-  rx_enable: True                     # Enable/disable receiver
   rx_gain_dB: 0                       # range: 0 to 73 dB
   rx_bandwidth: 500e3                 # RX bandwidth [Hz]
   rx_carrier: 866.5e6                 # RX local oscillator (carrier frequenzy)
@@ -23,7 +22,7 @@ receiver:
 modulation:
   type: "bpsk"                        # Modulation type: "BPSK", "QPSK", More to come
   symbol_rate: 250e3                  # Symbols per second. symbol period = 1 / symbol_rate = 4 us
-  samples_per_symbol: 8               # Samples per symbol
+  samples_per_symbol: 8               # Samples per Symbol. Must be an integer. Determines the oversampling factor for pulse shaping and matched filtering.
   sample_rate: 2e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
   rrc_roll_off: 0.5                   # Roll-off factor (alpha) for pulse shaping filter
   rrc_filter_span: 10                 # Filter span in symbols for RRC filter (total filter length = rrc_filter_span * samples_per_symbol)
@@ -33,9 +32,7 @@ modulation:
 
 barker_sequence:
   code_length: 13                     # Length of Barker code (choice: 7, 11 or 13)
-  correlation_scale_factor_threshold: 1.2             # Correlation threshold for preamble detection. Scale factor to acknowledge signal peaks above the noise floor. Adjust based on observed noise levels and signal strength.
+  correlation_scale_factor_threshold: 1.1             # Correlation threshold for preamble detection. Scale factor to acknowledge signal peaks above the noise floor. Adjust based on observed noise levels and signal strength.
 
 
-framing:
-  payload_size: 2                    # Payload size in bytes
 

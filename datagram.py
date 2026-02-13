@@ -21,7 +21,6 @@ class Datagram():
         - payload: variable length np.uint8 array
         - crc16: 2 bytes (CRC16 checksum of header + payload)
     """
-    _barker_code: np.uint16
     _msg_id: np.uint8
     _msg_type: msgType
     _payload_size: np.uint8
@@ -32,7 +31,6 @@ class Datagram():
                  msg_id: np.uint8 | None = None,
                  msg_type: msgType = msgType.DATA, 
                  payload: np.ndarray = np.array([], dtype=np.uint8), 
-                 barker_length: int = 13
             ):
         """Initialize datagram with payload and message type. Automatically computes CRC16 checksum.
             Args:
@@ -43,7 +41,6 @@ class Datagram():
         if len(payload) > 255:
             raise ValueError("Payload size exceeds maximum of 255 bytes.")
         
-        self._barker_code = BARKER_BITS[barker_length]
         self._msg_id = msg_id if msg_id is not None else np.random.randint(0, 256, dtype=np.uint8)
         self._msg_type = msg_type        
         self._payload_size = np.uint8(len(payload))
@@ -51,7 +48,6 @@ class Datagram():
 
         # compute CRC16 checksum over all fields
         self._crc16 = self.compute_crc16((
-            self._barker_code.tobytes() +
             bytes([self._msg_id]) +
             bytes([self._msg_type.value]) + 
             bytes([self._payload_size]) + 
@@ -60,12 +56,12 @@ class Datagram():
         
 
     @classmethod
-    def from_ack(cls, msg_id: np.uint8) -> 'Datagram':
+    def as_ack(cls, msg_id: np.uint8) -> 'Datagram':
         """Create an ACK datagram for a given message ID."""
         return cls(msg_id=msg_id, msg_type=msgType.ACK, payload=np.array([], dtype=np.uint8))
     
     @classmethod
-    def from_string(cls, 
+    def as_string(cls, 
                     text: str, 
                     msg_id: np.uint8 | None = None,
                     msg_type: msgType = msgType.DATA, 
@@ -82,11 +78,11 @@ class Datagram():
         Returns:
             Datagram object
         """
-        payload = np.frombuffer(text.encode(encoding), dtype=np.uint8)
+        payload = np.frombuffer(text.strip().encode(encoding), dtype=np.uint8)
         return cls(msg_type=msg_type, payload=payload)
     
     @classmethod
-    def from_bytes(cls, 
+    def as_bytes(cls, 
                    data: bytes, 
                    msg_id: np.uint8 | None = None,
                    msg_type: msgType = msgType.DATA
@@ -106,8 +102,7 @@ class Datagram():
 
     def pack(self) -> bytes:
         """Pack datagram into a single numpy array of uint8."""
-        return (self._barker_code.tobytes() + 
-                self.msg_id.tobytes() +
+        return (self._msg_id.tobytes() +
                 bytes([self._msg_type.value]) + 
                 bytes([self._payload_size]) + 
                 self._payload.tobytes() + 
@@ -123,37 +118,33 @@ class Datagram():
         Raises:
             ValueError: If the data is corrupted.
         """
-        MIN_LENGTH = 6 # 2 byte barker + 1 byte msg_type + 1 byte payload_size + 2 byte CRC16
+        MIN_LENGTH = 5 # 1 byte msg_ID + 1 byte msg_type + 1 byte payload_size + 2 byte CRC16
         if len(data) < MIN_LENGTH:
             raise ValueError("Data length is too short to be a valid datagram.")
 
         instance = cls.__new__(cls)
         
-        # parse fields
-        expected_barker = BARKER_BITS[13].tobytes()  # Expected Barker code for validation
-        instance._barker_code = np.frombuffer(data[:2], dtype=np.uint8).tobytes()
-        if instance._barker_code != expected_barker:
-            raise ValueError("Barker code does not match expected preamble, data may be corrupted.")
-        
-        instance._msg_id = np.frombuffer(data[2:3], dtype=np.uint8)[0]  # Extract message ID
+        # parse fields      
+        instance._msg_id = np.uint8(data[0])
 
-        instance._msg_type = msgType(data[3])
-        instance._payload_size = data[4]
+        instance._msg_type = msgType(data[1])
+        instance._payload_size = data[2]
         if len(data) != MIN_LENGTH + instance._payload_size:
             raise ValueError("Data length does not match expected length based on payload size.")
 
         
         # check if data length matches expected length based on payload size
-        instance._payload = np.frombuffer(data[5:5+instance._payload_size], dtype=np.uint8)
-        instance._crc16 = int.from_bytes(data[5+instance._payload_size:7+instance._payload_size], byteorder='big')
+        instance._payload = np.frombuffer(data[3:3+instance._payload_size], dtype=np.uint8)
+
+        instance._crc16 = int.from_bytes(data[3+instance._payload_size:5+instance._payload_size], byteorder='big')
 
         # Verify CRC16
-        computed_crc16 = instance.compute_crc16((
-            instance._barker_code + 
+        computed_crc16 = instance.compute_crc16(
+            bytes([instance._msg_id]) +
             bytes([instance._msg_type.value]) + 
             bytes([instance._payload_size]) + 
             instance._payload.tobytes()
-            ))
+            )
         
         if computed_crc16 != instance._crc16:
             raise ValueError("CRC16 checksum does not match, data may be corrupted.")
@@ -161,11 +152,6 @@ class Datagram():
         return instance
     
    
-    @staticmethod
-    def get_barker_code(self) -> np.uint16:
-        """Get the Barker code used in the datagram."""
-        return self._barker_code
-    
     @staticmethod
     def compute_crc16(data: bytes) -> np.uint16:
         """Compute CRC16 checksum."""
@@ -211,11 +197,11 @@ class Datagram():
         return len(self.pack())
     
     def __repr__(self) -> str:
-        return (f"\n\tmsg_type={self._msg_type.name},\n"
-                f"\tmsg_id={self._msg_id},\n"
-                f"\tpayload_size={self._payload_size},\n"
-                f"\tpayload={self._payload},\n"
-                f"\tcrc16={hex(self._crc16)}\n")
+        return (f"\n\tmsg_ID:\t\t{self._msg_id},\n"
+                f"\tmsg_type:\t{self._msg_type.name},\n"
+                f"\tpayload_size:\t{self._payload_size},\n"
+                f"\tpayload:\t{self._payload},\n"
+                f"\tcrc16:\t\t{hex(self._crc16)}")
 
     
 if __name__ == "__main__":
