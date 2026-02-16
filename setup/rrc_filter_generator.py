@@ -36,7 +36,6 @@ def try_filter_in_sdr():
         sdr.tx_hardwaregain_chan0 = int(float(config['transmitter']['tx_gain_dB']))
         sdr.sample_rate = int(float(config['modulation']['sample_rate']))
         sdr.tx_cyclic_buffer = bool(config['transmitter']['tx_cyclic_buffer'])
-        sdr._tx_buffer_size
 
         # Configure RX
 

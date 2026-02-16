@@ -1,40 +1,59 @@
 radio:
   ip_address: "ip:192.168.0.151"      # ip address of sdr radio
-  rrc_filter: "setup/rrc_filter.ftr"        # Path to RRC filter coefficients file
-  log_level: "DEBUG"                 # Log Level: "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
+  log_level: "DEBUG"                  # Log Level: "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
+  queue_size: 32                      # Maxsize of RX and TX queues. Also determines the max number of messages stored for display in the TUI.
+  debug_mode: True                    # If True, the system will run in debug mode with live plotting of signals.
 
 transmitter:
-  tx_enable: True                    # Enable/disable transmitter
-  tx_cyclic_buffer: True              # Enable/disable cyclic buffer
-  tx_gain_dB: 0                      # range: -90 to 0 dB
-  tx_bandwidth: 7e6
+  tx_cyclic_buffer: False             # Enable/disable cyclic buffer
+  tx_gain_dB: 0                       # range: -90 to 0 dB
+  tx_bandwidth: 500e3                 # TX bandwidth [Hz]
   tx_carrier: 866.5e6                 # TX local oscillator (carrier frequenzy)
-
+  tx_buffer_size: 1024                # 2**10 samples 
 
 receiver: 
-  rx_enable: True                     # Enable/disable receiver
   rx_gain_dB: 0                       # range: 0 to 73 dB
-  rx_bandwidth: 7e6
+  rx_bandwidth: 500e3                 # RX bandwidth [Hz]
   rx_carrier: 866.5e6                 # RX local oscillator (carrier frequenzy)
   gain_mode: 'manual'                 # "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
   buffer_size: 32768                  # 2**15 samples      
-  correlation_threshold: 0.8          # Correlation threshold for preamble detection (0.0 - 1.0)
 
 modulation:
   type: "bpsk"                        # Modulation type: "BPSK", "QPSK", More to come
-  symbol_rate: 250e3                  # Symbols per second
-  samples_per_symbol: 8               # Samples per symbol
-  sample_rate: 1e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
-  rrc_roll_off: 0.5                   # Roll-off factor (alpha) for pulse shaping filter
-  rrc_filter_span: 10                 # RRC filter span in symbols
+  symbol_rate: 250e3                  # Symbols per second. symbol period = 1 / symbol_rate = 4 us
+  samples_per_symbol: 8               # Samples per Symbol. Must be an integer. Determines the oversampling factor for pulse shaping and matched filtering.
+  sample_rate: 2e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
+
+coding:
   channel_coding_scheme: "hamming"    # Channel coding scheme: "hamming", More to come
   hamming_n: 15                        # Hamming code parameter n (total codeword length)
   hamming_k: 11                        # Hamming code parameter k (data length)
 
-preamble:
-  barker_code_length: 13              # Length of Barker code (choice: 7, 11 or 13)
-  preamble_length: 16                 # Length of preamble in bits
+filter:
+  rrc_roll_off: 0.5                   # Roll-off factor (alpha) for pulse shaping filter
+  rrc_filter_span: 10                 # Filter span in symbols for RRC filter (total filter length = rrc_filter_span * samples_per_symbol)
+  rrc_filter_scale_factor: 1          # (2**15-1) Scale factor for RRC filter coefficients to fit within int16 range for hardware filtering.
+  hardware_filter_enable: False        # Enable/disable hardware RRC filtering on the SDR. If False, RRC filtering is done in software.
+  hardware_filter_file: "rrc_filter_coefficients.ftr"  # File to store RRC filter coefficients for hardware filtering. Only used if rrc_filtering_enable is True.
 
-framing:
-  payload_size: 2                    # Payload size in bytes
+barker_sequence:
+  code_length: 13                     # Length of Barker code (choice: 7, 11 or 13)
+  correlation_scale_factor_threshold: 1.1             # Correlation threshold for preamble detection. Scale factor to acknowledge signal peaks above the noise floor. Adjust based on observed noise levels and signal strength.
 
+synchronization:
+  mm_reactance_factor: 0.3            # Reactance factor for Mueller and Muller timing error detector. Adjust to control the responsiveness of the timing recovery loop. Higher values may lead to faster convergence but can cause instability in noisy conditions.
+  interpolation_factor: 4             # Interpolation factor for timing recovery. Determines how many samples are generated between each original sample during interpolation. Higher values can improve timing resolution but increase computational complexity.
+
+
+
+plotter:
+  num_rows: 200                    # Number of rows in waterfall display
+  center_freq: 866.5e6             # Center frequency for display (Hz)
+  time_plot_samples: 500           # Number of samples to show in time plot
+  update_interval: 100             # Milliseconds between plot updates
+  psd_nperseg: 1024                # FFT size for PSD calculation
+  max_constellation_points: 500   # Max points in constellation diagram
+  psd_window: 'hann'               # Window function for PSD
+  psd_scaling: 'density'           # PSD scaling type
+  psd_max_points: 2048             # Max points in PSD plot
+  multi_window: True                  # If True, use multiple windows for different plots. If False, use a single window with subplots.

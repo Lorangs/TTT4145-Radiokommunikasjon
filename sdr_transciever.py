@@ -20,17 +20,13 @@ class SDRTransciever:
   
     def __del__(self):
         """Destructor to ensure SDR is disconnected."""
-        if self.sdr:
-            self.sdr.tx_destroy_buffer() # Ensure TX buffer is destroyed
-            del self.sdr
-            self.sdr = None
-            logging.info("SDR Transciever resources cleaned up.")
+        self.disconnect()
 
     def connect(self):
         """Connect to Adalm Pluto SDR and configure."""
         try:
             self.sdr = adi.Pluto(self.config['radio']['ip_address'])
-            logging.info(f"Connected to SDR at {self.config['radio']['ip_address']}.")
+            logging.info(f"Connected to SDR: {self.config['radio']['ip_address']}.")
 
             # Configure TX
             self.sdr.tx_rf_bandwidth = int(float(self.config['transmitter']['tx_bandwidth']))
@@ -46,7 +42,6 @@ class SDRTransciever:
             logging.info(f"TX Cyclic Buffer: {self.sdr.tx_cyclic_buffer}")
 
             # Configure RX
-
             self.sdr.rx_rf_bandwidth = int(float(self.config['receiver']['rx_bandwidth']))
             self.sdr.rx_lo = int(float(self.config['receiver']['rx_carrier']))
             self.sdr.rx_buffer_size = int(self.config['receiver']['buffer_size'])
@@ -60,17 +55,63 @@ class SDRTransciever:
             logging.info(f"RX Bandwidth\t: {self.sdr.rx_rf_bandwidth/1e6:.3f} MHz")
             logging.info(f"RX Carrier\t: {self.sdr.rx_lo/1e6:.3f} MHz")
             logging.info(f"RX Buffer Size\t: {self.sdr.rx_buffer_size} samples")
-
+            
             # set TX and RX filter
-            self.sdr.filter = self.config['radio']['rrc_filter']
-            logging.info(f"RRC Filter set with {len(self.sdr.filter)} taps.")
-
+            if self.config['filter']['hardware_filter_enable']:
+                self.sdr.filter = str(self.config['filter']['hardware_filter_file']).strip()
+                logging.info(f"RRC Filter\t: Hardware filtering enabled. Filter file: {self.config['filter']['hardware_filter_file']}")
+            else:
+                logging.info("RRC Filter\t: Software filtering enabled.")
             return True
         
         except Exception as e:
             logging.error(f"Error connecting to SDR: {e}")
             return False
+        
+    def disconnect(self):
+        """Disconnect from SDR and clean up resources."""
+        if self.sdr:
+            self.sdr.tx_destroy_buffer() # Ensure TX buffer is destroyed
+            del self.sdr
+            self.sdr = None
+            logging.info("Disconnected from SDR and cleaned up resources.")
 
+    def send_signal(self, signal: np.array):
+        """Send a raw signal through the SDR immediately."""
+        try:
+            self.sdr.tx_destroy_buffer()  # Clear any existing data in the SDR's transmission buffer
+            self.sdr.tx(signal * (2**14))   # Scale signal back to int16 range for transmission
+        except Exception as e:
+            raise Exception(f"Failed to send signal through SDR: {e}")
+            
+
+    def measure_noise_floor_dB(self) -> float:
+        """Measure the noise floor in dB by taking the average power of received samples."""
+        if not self.sdr:
+            raise Exception("SDR not connected. Cannot measure noise floor.")
+        
+        try:
+            sleep_time = 2  # [s] Time to wait for the SDR to stabilize before taking measurements
+            logging.info(f"Measuring noise floor... Waiting for {sleep_time} seconds to stabilize.")
+            from time import sleep
+            sleep(sleep_time)
+
+            # Take multiple measurements to get an average noise floor
+            num_measurements = 10
+            noise_powers = []
+            for _ in range(num_measurements):
+                samples = self.sdr.rx()
+                noise_power = np.mean(np.abs(samples)**2)
+                noise_powers.append(noise_power)
+            
+            avg_noise_power = np.mean(noise_powers)
+            noise_floor_dB = 10 * np.log10(avg_noise_power)
+            logging.info(f"Noise Floor\t: {noise_floor_dB:.2f} dB")
+            return noise_floor_dB
+        
+        except Exception as e:
+            logging.error(f"Error measuring noise floor: {e}")
+            return None
 
     def generate_test_signal(self, duration=1.0, freq=100e3):
         """Generate a test signal: a simple sine wave.
