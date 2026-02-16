@@ -32,7 +32,7 @@ coding:
 filter:
   rrc_roll_off: 0.5                   # Roll-off factor (alpha) for pulse shaping filter
   rrc_filter_span: 10                 # Filter span in symbols for RRC filter (total filter length = rrc_filter_span * samples_per_symbol)
-  rrc_filter_scale_factor: 32767       # (2**15-1) Scale factor for RRC filter coefficients to fit within int16 range for hardware filtering.
+  rrc_filter_scale_factor: 1          # (2**15-1) Scale factor for RRC filter coefficients to fit within int16 range for hardware filtering.
   hardware_filter_enable: False        # Enable/disable hardware RRC filtering on the SDR. If False, RRC filtering is done in software.
   hardware_filter_file: "rrc_filter_coefficients.ftr"  # File to store RRC filter coefficients for hardware filtering. Only used if rrc_filtering_enable is True.
 
@@ -56,3 +56,4 @@ plotter:
   psd_window: 'hann'               # Window function for PSD
   psd_scaling: 'density'           # PSD scaling type
   psd_max_points: 2048             # Max points in PSD plot
+  multi_window: True                  # If True, use multiple windows for different plots. If False, use a single window with subplots.

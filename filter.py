@@ -20,7 +20,7 @@ class RRCFilter:
                 span (int): Filter span in symbols (number of symbol durations the filter covers).
                 sps (int): Samples per symbol (oversampling factor).
         """
-        self.hardware_filter_enabled = bool(config['filter']['hardware_filter_enable'])
+        self.hardware_filter_enable = bool(config['filter']['hardware_filter_enable'])
         self.rx_bandwidth = int(float(config['receiver']['rx_bandwidth']))
         self.tx_bandwidth = int(float(config['transmitter']['tx_bandwidth']))
         self.rolloff = float(config['filter']['rrc_roll_off'])
@@ -33,8 +33,8 @@ class RRCFilter:
         self.scale_factor = int(config['filter']['rrc_filter_scale_factor'])
         self.coefficients = self.coefficients * self.scale_factor  # Scale filter coefficients to desired range
     
-        if self.hardware_filter_enabled:
-            self.write_filter_to_file(config['filter']['hardware_filter'])
+        if self.hardware_filter_enable:
+            self.write_filter_to_file(config['filter']['hardware_filter_file'])
 
 
     def _generate_rrc_filter(self) -> np.ndarray:
@@ -46,7 +46,7 @@ class RRCFilter:
 
         # If hardware filtering is enabled, the total number of filer
         # coefficients must be divisible by 16.
-        if self.hardware_filter_enabled:
+        if self.hardware_filter_enable:
             time_vector = np.arange(-num_taps//2 + 0.5, num_taps//2 + 0.5) * sample_periode
         else:
             time_vector = np.arange(-num_taps//2, num_taps//2 + 1) * sample_periode
@@ -80,7 +80,6 @@ class RRCFilter:
     def apply_filter(self, signal: np.ndarray) -> np.ndarray:
         """Apply RRC filter to the input signal."""
         return np.convolve(signal, self.coefficients, mode='same')
-        
 
     def write_filter_to_file(self, filename: str = "rrc_filter.ftr"):
         """Write RRC filter coefficients to a file for hardware implementation. The file format is expected to be:
@@ -149,7 +148,7 @@ if __name__ == "__main__":
     print(f"RC length:\t{len(rc)}\nRC energy:\t{np.sum(rc**2):.4f}")
     print(f"Time vector:\n{rrc_filter.time_vector}")
 
-    if rrc_filter.hardware_filter_enabled:
+    if rrc_filter.hardware_filter_enable:
         rx_generated_filter = []
         tx_generated_filter = []
         try:

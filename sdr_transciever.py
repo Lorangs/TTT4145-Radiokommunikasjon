@@ -80,7 +80,7 @@ class SDRTransciever:
         """Send a raw signal through the SDR immediately."""
         try:
             self.sdr.tx_destroy_buffer()  # Clear any existing data in the SDR's transmission buffer
-            self.sdr.tx(signal) * (2**14)  # Scale signal back to int16 range for transmission
+            self.sdr.tx(signal * (2**14))   # Scale signal back to int16 range for transmission
         except Exception as e:
             raise Exception(f"Failed to send signal through SDR: {e}")
             

@@ -575,6 +575,12 @@ class LivePlotWorker(QObject):
         self.running = False
 
 
+class StaticPlotSignaler(QObject):
+    """Helper class to signal main thread for static plot updates."""
+    plot_requested = pyqtSignal(dict)
+    
+    def __init__(self):
+        super().__init__()
 
 
 class LiveSDRPlotter(QMainWindow):
@@ -884,3 +890,324 @@ class LiveSDRPlotter(QMainWindow):
         """Handle window close event."""
         self.close_all()
         event.accept()
+
+
+
+
+class LivePlotWindow(QMainWindow):
+    """Base class for individual plot windows."""
+    
+    def __init__(self, title: str, size: Tuple[int, int] = (600, 400)):
+        super().__init__()
+        self.setWindowTitle(title)
+        self.setFixedSize(QSize(size[0], size[1]))
+        
+        # Main layout
+        layout = QHBoxLayout()
+        self.plot_layout = QVBoxLayout()
+        self.controls_layout = QVBoxLayout()
+        
+        layout.addLayout(self.plot_layout, stretch=4)
+        layout.addLayout(self.controls_layout, stretch=1)
+        
+        central_widget = QWidget()
+        central_widget.setLayout(layout)
+        self.setCentralWidget(central_widget)
+
+
+class TimePlotWindow(LivePlotWindow):
+    """Separate window for time domain plot."""
+    
+    def __init__(self):
+        super().__init__("Time Domain (I/Q)", (700, 400))
+        
+        # Create plot
+        self.plot = pg.PlotWidget(
+            labels={'left': 'Amplitude', 'bottom': 'Sample Index'},
+            title='Time Domain (I/Q)'
+        )
+        self.plot.setMouseEnabled(x=False, y=True)
+        self.plot.setYRange(-1.1, 1.1)
+        self.plot.addLegend()
+        
+        self.curve_i = self.plot.plot([], pen='c', name='I (In-phase)')
+        self.curve_q = self.plot.plot([], pen='y', name='Q (Quadrature)')
+        
+        self.plot_layout.addWidget(self.plot)
+        
+        # Controls
+        btn_auto = QPushButton('Auto Range')
+        btn_auto.clicked.connect(lambda: self.plot.autoRange())
+        self.controls_layout.addWidget(btn_auto)
+        
+        btn_adc = QPushButton('ADC Limits\n(-1 to +1)')
+        btn_adc.clicked.connect(lambda: self.plot.setYRange(-1.1, 1.1))
+        self.controls_layout.addWidget(btn_adc)
+        
+        self.controls_layout.addStretch()
+    
+    def update_plot(self, samples: np.ndarray):
+        """Update the plot with new samples."""
+        self.curve_i.setData(samples.real)
+        self.curve_q.setData(samples.imag)
+
+
+class FreqPlotWindow(LivePlotWindow):
+    """Separate window for frequency domain plot."""
+    
+    def __init__(self):
+        super().__init__("Power Spectral Density", (700, 400))
+        
+        self.plot = pg.PlotWidget(
+            labels={'left': 'PSD (dB)', 'bottom': 'Frequency (MHz)'},
+            title='Power Spectral Density'
+        )
+        self.plot.setMouseEnabled(x=False, y=True)
+        self.plot.setYRange(-60, 10)
+        
+        self.curve = self.plot.plot([], pen='g')
+        
+        self.plot_layout.addWidget(self.plot)
+        
+        # Controls
+        btn_auto = QPushButton('Auto Range')
+        btn_auto.clicked.connect(lambda: self.plot.autoRange())
+        self.controls_layout.addWidget(btn_auto)
+        
+        self.controls_layout.addStretch()
+    
+    def update_plot(self, freqs: np.ndarray, psd: np.ndarray):
+        """Update the plot with new data."""
+        self.curve.setData(freqs, psd)
+
+
+class WaterfallPlotWindow(LivePlotWindow):
+    """Separate window for waterfall/spectrogram plot."""
+    
+    def __init__(self):
+        super().__init__("Waterfall (Spectrogram)", (800, 500))
+        
+        # Waterfall plot with colorbar
+        waterfall_layout = QHBoxLayout()
+        
+        self.plot = pg.PlotWidget(
+            labels={'left': 'Time (rows)', 'bottom': 'Frequency Bin'},
+            title='Waterfall (Spectrogram)'
+        )
+        self.image = pg.ImageItem(axisOrder='col-major')
+        self.plot.addItem(self.image)
+        self.plot.setMouseEnabled(x=False, y=False)
+        
+        waterfall_layout.addWidget(self.plot)
+        
+        # Colorbar
+        self.colorbar = pg.HistogramLUTWidget()
+        self.colorbar.setImageItem(self.image)
+        self.colorbar.item.gradient.loadPreset('viridis')
+        self.image.setLevels((-50, 0))
+        
+        waterfall_layout.addWidget(self.colorbar)
+        
+        self.plot_layout.addLayout(waterfall_layout)
+        
+        # For auto-range
+        self.spectrogram_min = -50
+        self.spectrogram_max = 0
+        
+        # Controls
+        btn_auto = QPushButton('Auto Range\n(±2σ)')
+        btn_auto.clicked.connect(self._auto_range)
+        self.controls_layout.addWidget(btn_auto)
+        
+        self.controls_layout.addStretch()
+    
+    def _auto_range(self):
+        """Auto-range colormap based on statistics."""
+        self.image.setLevels((self.spectrogram_min, self.spectrogram_max))
+        self.colorbar.setLevels(self.spectrogram_min, self.spectrogram_max)
+    
+    def update_plot(self, spectrogram: np.ndarray):
+        """Update the waterfall with new data."""
+        self.image.setImage(spectrogram, autoLevels=False)
+        
+        sigma = np.std(spectrogram)
+        mean = np.mean(spectrogram)
+        self.spectrogram_min = mean - 2 * sigma
+        self.spectrogram_max = mean + 2 * sigma
+
+
+class ConstellationPlotWindow(LivePlotWindow):
+    """Separate window for constellation diagram."""
+    
+    def __init__(self):
+        super().__init__("Constellation Diagram", (500, 500))
+        
+        self.plot = pg.PlotWidget(
+            labels={'left': 'Quadrature', 'bottom': 'In-phase'},
+            title='Constellation Diagram'
+        )
+        self.plot.setAspectLocked(True)
+        self.plot.setXRange(-1.5, 1.5)
+        self.plot.setYRange(-1.5, 1.5)
+        
+        self.scatter = pg.ScatterPlotItem(
+            size=3, pen=None, brush=pg.mkBrush(100, 200, 255, 120)
+        )
+        self.plot.addItem(self.scatter)
+        
+        self.plot_layout.addWidget(self.plot)
+        
+        # Controls
+        btn_auto = QPushButton('Auto Range')
+        btn_auto.clicked.connect(lambda: self.plot.autoRange())
+        self.controls_layout.addWidget(btn_auto)
+        
+        btn_unit = QPushButton('Unit Circle\n(-1.5 to +1.5)')
+        btn_unit.clicked.connect(self._reset_range)
+        self.controls_layout.addWidget(btn_unit)
+        
+        btn_clear = QPushButton('Clear Points')
+        btn_clear.clicked.connect(self._clear)
+        self.controls_layout.addWidget(btn_clear)
+        
+        self.controls_layout.addStretch()
+        
+        # Buffer for clearing
+        self.clear_callback = None
+    
+    def _reset_range(self):
+        self.plot.setXRange(-1.5, 1.5)
+        self.plot.setYRange(-1.5, 1.5)
+    
+    def _clear(self):
+        self.scatter.setData([], [])
+        if self.clear_callback:
+            self.clear_callback()
+    
+    def update_plot(self, symbols: np.ndarray):
+        """Update the constellation with new symbols."""
+        valid_symbols = symbols[symbols != 0]
+        if len(valid_symbols) > 0:
+            self.scatter.setData(valid_symbols.real, valid_symbols.imag)
+
+
+class LiveSDRPlotterMultiWindow:
+    """
+    Multi-window version of LiveSDRPlotter.
+    Each plot type gets its own window that can be moved independently.
+    """
+    
+    def __init__(self, config: Dict, data_queue: Queue):
+        self.config = config
+        self.data_queue = data_queue
+        
+        # Extract configuration
+        plotter_config = config.get('plotter', {})
+        self.update_interval = int(plotter_config.get('update_interval', 100))
+        
+        # Create individual windows
+        self.time_window = TimePlotWindow()
+        self.freq_window = FreqPlotWindow()
+        self.waterfall_window = WaterfallPlotWindow()
+        self.constellation_window = ConstellationPlotWindow()
+        
+        # Store all windows for easy management
+        self.windows = [
+            self.time_window,
+            self.freq_window,
+            self.waterfall_window,
+            self.constellation_window
+        ]
+        
+        # Position windows in a grid
+        self._arrange_windows()
+        
+        # Setup worker thread
+        self._setup_worker()
+        
+        # For FPS tracking
+        self.last_update_time = time.time()
+        self.frame_count = 0
+        
+        logging.info("LiveSDRPlotterMultiWindow initialized with 4 separate windows")
+    
+    def _arrange_windows(self):
+        """Arrange windows in a 2x2 grid on screen."""
+        # Get screen geometry (approximate positioning)
+        x_offset = 50
+        y_offset = 50
+        
+        # Top-left: Time domain
+        self.time_window.move(x_offset, y_offset)
+        
+        # Top-right: Frequency domain
+        self.freq_window.move(x_offset + 720, y_offset)
+        
+        # Bottom-left: Waterfall
+        self.waterfall_window.move(x_offset, y_offset + 450)
+        
+        # Bottom-right: Constellation
+        self.constellation_window.move(x_offset + 820, y_offset + 450)
+    
+    def _setup_worker(self):
+        """Setup the worker thread for data processing."""
+        self.worker_thread = QThread()
+        self.worker_thread.setObjectName('PlotWorker_Thread')
+        
+        self.worker = LivePlotWorker(self.config, self.data_queue)
+        self.worker.moveToThread(self.worker_thread)
+        
+        # Connect signals to individual window update methods
+        self.worker.time_plot_update.connect(self.time_window.update_plot)
+        self.worker.freq_plot_update.connect(self.freq_window.update_plot)
+        self.worker.waterfall_plot_update.connect(self.waterfall_window.update_plot)
+        self.worker.constellation_plot_update.connect(self.constellation_window.update_plot)
+        self.worker.end_of_run.connect(self._on_worker_cycle_complete)
+        
+        # Set up constellation clear callback
+        self.constellation_window.clear_callback = self._clear_constellation_buffer
+        
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker_thread.start()
+    
+    def _clear_constellation_buffer(self):
+        """Clear the worker's constellation buffer."""
+        if hasattr(self, 'worker'):
+            self.worker.constellation_buffer.fill(0)
+            self.worker.constellation_index = 0
+    
+    def _on_worker_cycle_complete(self):
+        """Called when worker completes one cycle."""
+        self.frame_count += 1
+        current_time = time.time()
+        elapsed = current_time - self.last_update_time
+        
+        if elapsed >= 1.0:
+            fps = self.frame_count / elapsed
+            # Update title of time window with FPS
+            self.time_window.setWindowTitle(f"Time Domain (I/Q) - {fps:.1f} FPS")
+            self.frame_count = 0
+            self.last_update_time = current_time
+        
+        QTimer.singleShot(self.update_interval, self.worker.run)
+    
+    def show(self):
+        """Show all windows."""
+        for window in self.windows:
+            window.show()
+    
+    def close_all(self):
+        """Close all windows and cleanup."""
+        logging.info("Closing LiveSDRPlotterMultiWindow...")
+        
+        if hasattr(self, 'worker'):
+            self.worker.stop()
+        
+        if hasattr(self, 'worker_thread') and self.worker_thread.isRunning():
+            self.worker_thread.quit()
+            self.worker_thread.wait(2000)
+        
+        for window in self.windows:
+            window.close()
+        
+        logging.info("LiveSDRPlotterMultiWindow closed")

@@ -38,13 +38,16 @@ from synchronize import Synchronizer
 
 # Optional imports for debug mode
 try:
-    from sdr_plots import LiveSDRPlotter
+    from sdr_plots import LiveSDRPlotter, LiveSDRPlotterMultiWindow, StaticSDRPlotter, StaticPlotSignaler
+    from matplotlib.pyplot import show
     from PyQt6.QtWidgets import QApplication
     from PyQt6.QtCore import QTimer
     HAS_PLOTTER = True
 except ImportError:
     HAS_PLOTTER = False
     LiveSDRPlotter = None
+    LiveSDRPlotterMultiWindow = None
+    StaticPlotSignaler = None
     QApplication = None
 
 
@@ -75,7 +78,6 @@ class SDRChatApp:
         self.rx_thread: threading.Thread = None
         self.tx_thread: threading.Thread = None
         self.tui_thread: threading.Thread = None
-        self.shutdown_event: threading.Event = threading.Event()
         self.tui_refresh_event: threading.Event = threading.Event()
 
         # ================== Message queues for inter-thread communication ==================
@@ -101,6 +103,8 @@ class SDRChatApp:
         self.qapp = None
         self.plotter = None
         self.plot_data_queue: Queue[np.ndarray] = Queue(maxsize=32)
+        self.static_plotter= StaticSDRPlotter()  # For static plots of filter response, constellation, etc.
+        self.static_plot_queue: Queue[Dict[str, np.ndarray]] = Queue(maxsize=8)  # Queue for static plot data (e.g., filter response, constellation points)
 
         # Initialize plotter if debug mode is enabled
         if self.debug_mode and HAS_PLOTTER:
@@ -111,7 +115,6 @@ class SDRChatApp:
             self.debug_mode = False
         
                 
-
         # ====================== Setup signal handlers for graceful shutdown =====================
         atexit.register(self._cleanup)
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -131,7 +134,6 @@ class SDRChatApp:
         """Handle termination signals for graceful shutdown."""
         logging.info(f"Signal {signum} received. Initiating graceful shutdown...")
         self.running = False
-        self.shutdown_event.set()  # Signal threads to shutdown
 
     def _cleanup(self):
         """Clean up resources, stop threads, and disconnect SDR. This function is designed to be idempotent and can be safely called multiple times."""
@@ -143,8 +145,6 @@ class SDRChatApp:
                 # 1. Stop all threads and signal them to shutdown
                 if hasattr(self, 'running'):
                     self.running = False  # Signal threads to stop
-                if hasattr(self, 'shutdown_event'):
-                    self.shutdown_event.set()  # Ensure all threads are signaled to shutdown
 
                 # 2. Close debug plots before joining threads
                 if hasattr(self, 'plotter') and self.plotter is not None:
@@ -153,7 +153,6 @@ class SDRChatApp:
                         logging.info("Closed debug plot windows.")
                     except Exception as e:
                         logging.error(f"Error closing debug plot windows: {e}")
-
 
                 # 3. Clean up queues
                 if hasattr(self, 'rx_queue'):
@@ -193,10 +192,9 @@ class SDRChatApp:
                     except Exception as e:
                         logging.error(f"Error disconnecting SDR: {e}")
 
-            
                 # 6. delete filter file if it exists
-                if hasattr(self.matched_filter, 'hardware_filter_enabled') and self.matched_filter.hardware_filter_enabled:
-                    filter_file = self.config['radio']['rrc_filter']
+                if hasattr(self.matched_filter, 'hardware_filter_enable') and self.matched_filter.hardware_filter_enable:
+                    filter_file = self.config['radio']['hardware_filter_file']
                     if os.path.exists(filter_file):
                         os.remove(filter_file)
                         logging.info(f"Deleted temporary filter file: {filter_file}")
@@ -248,7 +246,6 @@ class SDRChatApp:
         """Stop the SDR Chat Application."""
         logging.info("Stopping SDR Chat Application...")
         self.running = False
-        self.shutdown_event.set()  # Signal threads to shutdown
 
         # Wait for threads to finish
         if self.rx_thread and self.rx_thread.is_alive():
@@ -272,21 +269,62 @@ class SDRChatApp:
     def _init_plotter(self):
         """Initialize the live plotter for debug mode."""
         try:
-            # Create QApplication if it doesn't exist
             if QApplication.instance() is None:
                 self.qapp = QApplication(sys.argv)
             else:
                 self.qapp = QApplication.instance()
             
-            # Create the plotter window
-            self.plotter = LiveSDRPlotter(self.config, self.plot_data_queue)
-            self.plotter.show()
+            # Choose between single-window or multi-window mode
+            use_multi_window = self.config.get('plotter', {}).get('multi_window', True)
             
-            logging.info("Live plotter initialized successfully")
+            if use_multi_window:
+                self.plotter = LiveSDRPlotterMultiWindow(self.config, self.plot_data_queue)
+            else:
+                self.plotter = LiveSDRPlotter(self.config, self.plot_data_queue)
+            
+            self.plotter.show()
+
+            # Setup static plot signaler for thread-safe plot requests
+            self.static_plot_signaler = StaticPlotSignaler()
+            self.static_plot_signaler.plot_requested.connect(self._handle_static_plot)
+           
+            logging.info(f"Live plotter initialized ({'multi-window' if use_multi_window else 'single-window'} mode)")
         except Exception as e:
             logging.error(f"Failed to initialize live plotter: {e}")
             self.debug_mode = False
             self.plotter = None
+
+
+    def _handle_static_plot(self, plot_data: dict):
+        """Handle static plot request (runs in main thread)."""
+        try:
+            plot_type = plot_data.get('type')
+            data = plot_data.get('data')
+            title = plot_data.get('title', '')
+            
+            if plot_type == 'time_domain':
+                self.static_plotter.plot_time_domain(
+                    data, 
+                    float(self.config['modulation']['sample_rate']),
+                    title=title
+                )
+            elif plot_type == 'constellation':
+                self.static_plotter.plot_constellation(data, title=title)
+            elif plot_type == 'psd':
+                sample_rate = float(plot_data.get('sample_rate', self.config['modulation']['sample_rate']))
+                center_freq = float(plot_data.get('center_freq', self.config['plotter']['center_freq']))
+                self.static_plotter.plot_psd(data, sample_rate, center_freq=center_freq, title=title)
+            
+            show(block=False)
+            
+        except Exception as e:
+            logging.error(f"Error handling static plot: {e}")
+
+    def request_static_plot(self, plot_data: dict):
+        """Thread-safe method to request a static plot from any thread."""
+        if self.debug_mode and hasattr(self, 'static_plot_signaler'):
+            self.static_plot_signaler.plot_requested.emit(plot_data)
+
 
 
     # ================= Message Handling =================
@@ -320,14 +358,11 @@ class SDRChatApp:
         """Receive loop - continuously receive data from SDR and process it."""
         logging.info("RX loop started.")
 
-        sample_rate = self.config['modulation']['sample_rate']
-        plot_counter = 0
-
         while self.running:
             try:
-                received_signal = self.sdr.sdr.rx() / (2**14)  # Normalize received signal to [-1, 1] range
+                received_signal = self.sdr.sdr.rx()
 
-                if self.matched_filter.hardware_filter_enabled:
+                if self.matched_filter.hardware_filter_enable:
                     filtered_signal = received_signal  # Assume hardware filtering is applied by the SDR
                 else:
                     filtered_signal = self.matched_filter.apply_filter(received_signal)
@@ -336,14 +371,12 @@ class SDRChatApp:
                 if self.debug_mode and self.plotter is not None:
                     try:
                         # Non-blocking put - drop if queue is full
-                        self.plot_data_queue.put_nowait(received_signal.copy())
+                        self.plot_data_queue.put_nowait(filtered_signal.copy())
                     except Full:
                         pass  # Drop frame if plotter can't keep up
 
                 synchronized_signal = self.synchronizer.synchronize(filtered_signal)
-
                 decimated_signal = self.modulation_protocol.downsample_symbols(synchronized_signal)
-
                 barker_index = self.barker_detector.detect(decimated_signal)
 
                 if barker_index is not None:
@@ -382,17 +415,35 @@ class SDRChatApp:
         while self.running:
             try:
                 datagram: Datagram = self.tx_queue.get(timeout=0.1)  # Wait for message to send
-
                 modulated_signal = self.modulation_protocol.modulate_message(datagram)
-
                 signal_with_barker = self.barker_detector.add_barker_code(modulated_signal)
-
                 upsampled_signal = self.modulation_protocol.upsample_symbols(signal_with_barker)
 
-                if self.matched_filter.hardware_filter_enabled:
-                    filtered_signal = upsampled_signal  # Assume hardware filtering is applied by the SDR
+                if self.matched_filter.hardware_filter_enable:
+                    filtered_signal = upsampled_signal  # Assume hardware filtering is applied by the SDR TODO: Not working as inteded
                 else:
                     filtered_signal = self.matched_filter.apply_filter(upsampled_signal)
+
+                if self.debug_mode:
+                    logging.debug(f"TX loop got datagram from queue: {datagram}")
+
+                    #self.request_static_plot({
+                    #    'type': 'time_domain',
+                    #    'data': filtered_signal.copy(),
+                    #    'title': f"Transmitted Signal"})
+                    
+                    #self.request_static_plot({
+                    #    'type': 'constellation',
+                    #    'data': filtered_signal.copy(),
+                    #    'title': f"Transmitted Constellation"})
+                    #
+                    #self.request_static_plot({
+                    #    'type': 'psd',
+                    #    'data': filtered_signal.copy(),
+                    #    'title': f"Transmitted Signal PSD",
+                    #    'sample_rate': self.config['modulation']['sample_rate'],
+                    #    'center_freq': self.config['plotter']['center_freq']
+                    #})
 
                 self.sdr.send_signal(filtered_signal)
 
@@ -510,6 +561,12 @@ class SDRChatApp:
             force=True  # Ensure that logging configuration is applied even if logging was previously configured
         )
         
+        logging.getLogger('matplotlib').setLevel(logging.WARNING)
+        logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
+        logging.getLogger('matplotlib.pyplot').setLevel(logging.WARNING)
+        logging.getLogger('PIL').setLevel(logging.WARNING)
+        logging.getLogger('pyqtgraph').setLevel(logging.WARNING)
+
 
         logging.info("\n\n--- New Application Session Started ---")
         logging.info(f"Logging configured: level={debug_mode}, file={self.debug_file}")
@@ -531,6 +588,7 @@ if __name__ == "__main__":
             if app.debug_mode and app.qapp is not None:
                 # Process Qt events to keep plotter responsive
                 app.qapp.processEvents()
+                
             time.sleep(0.01)  # Small sleep to prevent CPU spinning
 
     except KeyboardInterrupt:

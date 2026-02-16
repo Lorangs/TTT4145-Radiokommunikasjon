@@ -16,4 +16,5 @@ initial_tests/*
 # ignore python bytecode
 __pycache__/
 
-Juks fra CoPilot/*
+#ignore filter coefficient files
+*.ftr
