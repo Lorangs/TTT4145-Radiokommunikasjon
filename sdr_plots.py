@@ -3,13 +3,22 @@ SDR Visualization Library
 Plotting utilities for radio waveform analysis and visualization
 """
 
+# Standard library imports
+import logging
+from typing import Optional, Tuple, Dict
+import time
+
+# Third party imports
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
-from typing import Optional, Tuple
 from scipy import signal
-import sys
-import warnings
+
+from PyQt6.QtCore import QSize, Qt, QThread, pyqtSignal, QObject, QTimer
+from PyQt6.QtWidgets import QApplication, QMainWindow, QGridLayout, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel
+import pyqtgraph as pg
+from queue import Queue, Empty, Full
+
 
 
 class StaticSDRPlotter:
@@ -29,7 +38,6 @@ class StaticSDRPlotter:
         try:
             plt.style.use(style)
         except Exception as e:
-            warnings.warn(f"Could not load style '{style}', using default. Error: {e}")
             plt.style.use('default')
 
     def __del__(self):
@@ -450,406 +458,429 @@ class StaticSDRPlotter:
         
 
 
-class LiveSDRPlotter(StaticSDRPlotter):
+
+
+class LivePlotWorker(QObject):
     """
-    Live plotting class for real-time SDR visualization.
-    Uses matplotlib FuncAnimation for smooth, non-blocking updates.
+    Worker object that processes SDR data and emits signals for plot updates.
+    Runs in a separate thread to avoid blocking the GUI.
     """
     
-    def __init__(self, 
-                 data_callback,
-                 sample_rate: float,
-                 center_freq: float = 0,
-                 update_interval: int = 50,
-                 max_samples: int = 2048,
-                 waterfall_history: int = 100,
-                 style: str = 'dark_background'):
+    # PyQt Signals for updating plots
+    time_plot_update = pyqtSignal(np.ndarray)           # Raw IQ samples
+    freq_plot_update = pyqtSignal(np.ndarray, np.ndarray)  # (frequencies, PSD values)
+    waterfall_plot_update = pyqtSignal(np.ndarray)      # Spectrogram data
+    constellation_plot_update = pyqtSignal(np.ndarray)  # Constellation symbols
+    end_of_run = pyqtSignal()                           # Signals completion of one update cycle
+    
+    def __init__(self, config: Dict, data_queue: Queue):
         """
-        Initialize live plotter.
+        Initialize the worker with configuration and data queue.
         
         Args:
-            data_callback: Function that returns new IQ samples when called (e.g., sdr.rx)
-            sample_rate: Sample rate in Hz
-            center_freq: Center frequency in Hz
-            update_interval: Update period in milliseconds (e.g., 50ms = 20 fps)
-            max_samples: Maximum samples to display in time domain
-            waterfall_history: Number of FFT lines to keep in waterfall
-            style: Matplotlib style
+            config: Configuration dictionary from config.yaml
+            data_queue: Thread-safe queue for receiving samples from RX loop
         """
-        super().__init__(style)
-        self.data_callback = data_callback
-        self.sample_rate = sample_rate
-        self.center_freq = center_freq
-        self.update_interval = update_interval
-        self.max_samples = max_samples
-        self.waterfall_history = waterfall_history
+        super().__init__()
         
-        # Animation objects (created when starting)
-        self.animation = None
-        self.fig = None
-        self.running = False
+        # Extract configuration parameters
+        plotter_config = config.get('plotter', {})
+        self.sample_rate = float(config['modulation']['sample_rate'])
+        self.center_freq = float(plotter_config.get('center_freq', 866.5e6))
+        self.num_rows = int(plotter_config.get('num_rows', 200))
+        self.time_plot_samples = int(plotter_config.get('time_plot_samples', 500))
+        self.psd_nperseg = int(plotter_config.get('psd_nperseg', 1024))
+        self.max_constellation_points = int(plotter_config.get('max_constellation_points', 500))
+        self.psd_window = str(plotter_config.get('psd_window', 'hann'))
+        self.psd_scaling = str(plotter_config.get('psd_scaling', 'density'))
+        self.psd_max_points = int(plotter_config.get('psd_max_points', 2048))
         
-        # Waterfall data buffer
-        self.waterfall_data = None
+        # Data queue for receiving samples
+        self.data_queue = data_queue
         
-        # Setup signal handler for graceful shutdown
-        self._setup_signal_handler()
-    
-    def _setup_signal_handler(self):
-        """Setup signal handler for Ctrl+C."""
-        def signal_handler(sig, frame):
-            print("\nInterrupt received, stopping live plot...")
-            self.stop()
-            sys.exit(0)
+        # Initialize spectrogram buffer (frequency bins x time rows)
+        self.fft_size = self.psd_nperseg
+        self.spectrogram = -50 * np.ones((self.fft_size, self.num_rows))
         
-        signal.signal(signal.SIGINT, signal_handler)
-    
-    def start_spectrum_analyzer(self, 
-                               nfft: int = 1024,
-                               figsize: Tuple[int, int] = (12, 6)):
+        # Running average for PSD smoothing
+        self.PSD_avg = -50 * np.ones(self.fft_size)
+        self.psd_alpha = 0.1  # Smoothing factor (0.1 = slow, 0.9 = fast)
+        
+        # Constellation point buffer (circular buffer)
+        self.constellation_buffer = np.zeros(self.max_constellation_points, dtype=np.complex64)
+        self.constellation_index = 0
+        
+        # Control flag
+        self.running = True
+        
+    def run(self):
         """
-        Start live spectrum analyzer (FFT plot that updates continuously).
-        
-        Args:
-            nfft: FFT size
-            figsize: Figure size
+        Main processing loop. Retrieves data from queue and emits plot updates.
+        Called repeatedly via QTimer in the main window.
         """
-        try:
-            from matplotlib.animation import FuncAnimation
-        except ImportError:
-            print("Error: matplotlib animation support required")
+        if not self.running:
             return
-        
+            
         try:
-            # Create figure
-            self.fig, self.ax = plt.subplots(figsize=figsize)
-            self.ax.set_xlabel('Frequency (MHz)' if self.center_freq > 0 else 'Frequency (kHz)', 
-                              fontsize=10)
-            self.ax.set_ylabel('Magnitude (dB)', fontsize=10)
-            self.ax.set_title('Live Spectrum Analyzer', fontsize=12)
-            self.ax.grid(True, alpha=0.3)
+            # Try to get data from queue (non-blocking)
+            samples = self.data_queue.get_nowait()
             
-            # Initialize line
-            self.line, = self.ax.plot([], [], linewidth=1)
+            # === Time Domain Update ===
+            # Emit only the first N samples for time plot
+            time_samples = samples[:min(len(samples), self.time_plot_samples)]
+            self.time_plot_update.emit(time_samples)
             
-            # Store parameters
-            self.nfft = nfft
+            # === Frequency Domain (PSD) Update ===
+            # Compute PSD using FFT
+            fft_data = np.fft.fftshift(np.fft.fft(samples, n=self.fft_size))
+            PSD = 10.0 * np.log10(np.abs(fft_data)**2 / self.fft_size + 1e-12)
             
-            # Animation update function
-            def update(frame):
-                if not self.running:
-                    return self.line,
-                
-                try:
-                    # Get new samples
-                    samples = self.data_callback()
-                    
-                    if samples is None or len(samples) == 0:
-                        return self.line,
-                    
-                    # Decimate if needed
-                    if len(samples) > self.nfft:
-                        samples = samples[:self.nfft]
-                    
-                    # Compute FFT
-                    fft_data = np.fft.fftshift(np.fft.fft(samples, n=self.nfft))
-                    fft_db = 20 * np.log10(np.abs(fft_data) + 1e-12)
-                    
-                    # Frequency axis
-                    freqs = np.fft.fftshift(np.fft.fftfreq(self.nfft, 1/self.sample_rate))
-                    if self.center_freq > 0:
-                        freqs = (freqs + self.center_freq) / 1e6  # MHz
-                    else:
-                        freqs = freqs / 1e3  # kHz
-                    
-                    # Update line
-                    self.line.set_data(freqs, fft_db)
-                    
-                    # Auto-scale y-axis
-                    if len(fft_db) > 0:
-                        self.ax.set_ylim([np.min(fft_db) - 5, np.max(fft_db) + 5])
-                        self.ax.set_xlim([freqs[0], freqs[-1]])
-                    
-                except KeyboardInterrupt:
-                    self.stop()
-                except Exception as e:
-                    print(f"Error in spectrum update: {e}")
-                
-                return self.line,
+            # Apply exponential moving average for smoothing
+            self.PSD_avg = self.PSD_avg * (1 - self.psd_alpha) + PSD * self.psd_alpha
             
-            # Create animation
-            self.animation = FuncAnimation(self.fig, update, interval=self.update_interval,
-                                          blit=True, cache_frame_data=False)
-            self.running = True
+            # Generate frequency axis
+            freqs = np.fft.fftshift(np.fft.fftfreq(self.fft_size, 1/self.sample_rate))
+            freqs = (freqs + self.center_freq) / 1e6  # Convert to MHz
             
-            plt.tight_layout()
-            print("Live spectrum analyzer started. Press Ctrl+C to stop.")
-            plt.show()
+            self.freq_plot_update.emit(freqs, self.PSD_avg)
+            
+            # === Waterfall (Spectrogram) Update ===
+            # Roll spectrogram and insert new row
+            self.spectrogram = np.roll(self.spectrogram, 1, axis=1)
+            self.spectrogram[:, 0] = PSD
+            self.waterfall_plot_update.emit(self.spectrogram)
+            
+            # === Constellation Update ===
+            # Add new samples to circular buffer
+            num_new = min(len(samples), self.max_constellation_points)
+            end_idx = min(self.constellation_index + num_new, self.max_constellation_points)
+            samples_to_add = num_new if end_idx - self.constellation_index >= num_new else end_idx - self.constellation_index
+            
+            self.constellation_buffer[self.constellation_index:self.constellation_index + samples_to_add] = samples[:samples_to_add]
+            self.constellation_index = (self.constellation_index + samples_to_add) % self.max_constellation_points
+            
+            self.constellation_plot_update.emit(self.constellation_buffer.copy())
+            
+        except Empty:
+            # No data available, skip this cycle
+            pass
         except Exception as e:
-            print(f"Error starting spectrum analyzer: {e}")
-            self.stop()
-    
-    def start_waterfall(self,
-                       nfft: int = 1024,
-                       figsize: Tuple[int, int] = (12, 8)):
-        """
-        Start live waterfall display (spectrogram-style).
+            logging.error(f"Error in LivePlotWorker.run(): {e}")
         
-        Args:
-            nfft: FFT size
-            figsize: Figure size
-        """
-        try:
-            from matplotlib.animation import FuncAnimation
-        except ImportError:
-            print("Error: matplotlib animation support required")
-            return
-        
-        try:
-            # Create figure
-            self.fig, self.ax = plt.subplots(figsize=figsize)
-            self.ax.set_xlabel('Frequency (MHz)' if self.center_freq > 0 else 'Frequency (kHz)',
-                              fontsize=10)
-            self.ax.set_ylabel('Time (updates)', fontsize=10)
-            self.ax.set_title('Live Waterfall', fontsize=12)
-            
-            # Initialize waterfall buffer
-            self.waterfall_data = np.zeros((self.waterfall_history, nfft))
-            self.nfft = nfft
-            
-            # Frequency axis
-            freqs = np.fft.fftshift(np.fft.fftfreq(nfft, 1/self.sample_rate))
-            if self.center_freq > 0:
-                freqs = (freqs + self.center_freq) / 1e6  # MHz
-            else:
-                freqs = freqs / 1e3  # kHz
-            
-            self.freqs = freqs
-            
-            # Initialize image
-            self.waterfall_img = self.ax.imshow(self.waterfall_data,
-                                               aspect='auto',
-                                               extent=[freqs[0], freqs[-1], 0, self.waterfall_history],
-                                               cmap='viridis',
-                                               interpolation='nearest',
-                                               vmin=-80, vmax=0)
-            
-            cbar = plt.colorbar(self.waterfall_img, ax=self.ax)
-            cbar.set_label('Power (dB)', fontsize=10)
-            
-            # Animation update function
-            def update(frame):
-                if not self.running:
-                    return self.waterfall_img,
-                
-                try:
-                    # Get new samples
-                    samples = self.data_callback()
-                    
-                    if samples is None or len(samples) == 0:
-                        return self.waterfall_img,
-                    
-                    # Decimate if needed
-                    if len(samples) > self.nfft:
-                        samples = samples[:self.nfft]
-                    
-                    # Compute FFT
-                    fft_data = np.fft.fftshift(np.fft.fft(samples, n=self.nfft))
-                    fft_db = 20 * np.log10(np.abs(fft_data) + 1e-12)
-                    
-                    # Scroll waterfall: move old data up, add new line at bottom
-                    self.waterfall_data = np.roll(self.waterfall_data, 1, axis=0)
-                    self.waterfall_data[0, :] = fft_db
-                    
-                    # Update image
-                    self.waterfall_img.set_data(self.waterfall_data)
-                    
-                except KeyboardInterrupt:
-                    self.stop()
-                except Exception as e:
-                    print(f"Error in waterfall update: {e}")
-                
-                return self.waterfall_img,
-            
-            # Create animation
-            self.animation = FuncAnimation(self.fig, update, interval=self.update_interval,
-                                          blit=True, cache_frame_data=False)
-            self.running = True
-            
-            plt.tight_layout()
-            print("Live waterfall started. Press Ctrl+C to stop.")
-            plt.show()
-        except Exception as e:
-            print(f"Error starting waterfall: {e}")
-            self.stop()
-    
-    def start_time_domain(self, figsize: Tuple[int, int] = (12, 6)):
-        """
-        Start live time domain plot (I/Q signals).
-        
-        Args:
-            figsize: Figure size
-        """
-        try:
-            from matplotlib.animation import FuncAnimation
-        except ImportError:
-            print("Error: matplotlib animation support required")
-            return
-        
-        try:
-            # Create figure
-            self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=figsize)
-            self.ax1.set_ylabel('I (In-phase)', fontsize=10)
-            self.ax1.set_title('Live Time Domain Signal', fontsize=12)
-            self.ax1.grid(True, alpha=0.3)
-            
-            self.ax2.set_xlabel('Time (μs)', fontsize=10)
-            self.ax2.set_ylabel('Q (Quadrature)', fontsize=10)
-            self.ax2.grid(True, alpha=0.3)
-            
-            # Initialize lines
-            self.line_i, = self.ax1.plot([], [], linewidth=0.8)
-            self.line_q, = self.ax2.plot([], [], linewidth=0.8, color='orange')
-            
-            # Animation update function
-            def update(frame):
-                if not self.running:
-                    return self.line_i, self.line_q
-                
-                try:
-                    # Get new samples
-                    samples = self.data_callback()
-                    
-                    if samples is None or len(samples) == 0:
-                        return self.line_i, self.line_q
-                    
-                    # Decimate for display
-                    samples = samples[:self.max_samples]
-                    time = np.arange(len(samples)) / self.sample_rate * 1e6  # μs
-                    
-                    # Update lines
-                    self.line_i.set_data(time, samples.real)
-                    self.line_q.set_data(time, samples.imag)
-                    
-                    # Auto-scale
-                    self.ax1.set_xlim([0, time[-1]])
-                    self.ax2.set_xlim([0, time[-1]])
-                    
-                    i_max = np.max(np.abs(samples.real))
-                    q_max = np.max(np.abs(samples.imag))
-                    self.ax1.set_ylim([-i_max*1.1, i_max*1.1])
-                    self.ax2.set_ylim([-q_max*1.1, q_max*1.1])
-                    
-                except KeyboardInterrupt:
-                    self.stop()
-                except Exception as e:
-                    print(f"Error in time domain update: {e}")
-                
-                return self.line_i, self.line_q
-            
-            # Create animation
-            self.animation = FuncAnimation(self.fig, update, interval=self.update_interval,
-                                          blit=True, cache_frame_data=False)
-            self.running = True
-            
-            plt.tight_layout()
-            print("Live time domain plot started. Press Ctrl+C to stop.")
-            plt.show()
-        except Exception as e:
-            print(f"Error starting time domain plot: {e}")
-            self.stop()
-    
-    def start_constellation(self, 
-                          decimation: int = 8,
-                          figsize: Tuple[int, int] = (8, 8)):
-        """
-        Start live constellation diagram.
-        
-        Args:
-            decimation: Show every Nth sample
-            figsize: Figure size
-        """
-        try:
-            from matplotlib.animation import FuncAnimation
-        except ImportError:
-            print("Error: matplotlib animation support required")
-            return
-        
-        try:
-            # Create figure
-            self.fig, self.ax = plt.subplots(figsize=figsize)
-            self.ax.set_xlabel('In-phase', fontsize=10)
-            self.ax.set_ylabel('Quadrature', fontsize=10)
-            self.ax.set_title('Live Constellation Diagram', fontsize=12)
-            self.ax.grid(True, alpha=0.3)
-            self.ax.axis('equal')
-            
-            # Initialize scatter
-            self.scatter = self.ax.scatter([], [], alpha=0.5, s=2)
-            
-            # Store decimation
-            self.decimation = decimation
-            
-            # Animation update function
-            def update(frame):
-                if not self.running:
-                    return self.scatter,
-                
-                try:
-                    # Get new samples
-                    samples = self.data_callback()
-                    
-                    if samples is None or len(samples) == 0:
-                        return self.scatter,
-                    
-                    # Decimate
-                    symbols = samples[::self.decimation]
-                    
-                    # Update scatter
-                    self.scatter.set_offsets(np.c_[symbols.real, symbols.imag])
-                    
-                    # Auto-scale
-                    if len(symbols) > 0:
-                        max_val = max(np.abs(symbols.real).max(), np.abs(symbols.imag).max())
-                        self.ax.set_xlim(-max_val*1.2, max_val*1.2)
-                        self.ax.set_ylim(-max_val*1.2, max_val*1.2)
-                    
-                except KeyboardInterrupt:
-                    self.stop()
-                except Exception as e:
-                    print(f"Error in constellation update: {e}")
-                
-                return self.scatter,
-            
-            # Create animation
-            self.animation = FuncAnimation(self.fig, update, interval=self.update_interval,
-                                          blit=True, cache_frame_data=False)
-            self.running = True
-            
-            plt.tight_layout()
-            print("Live constellation diagram started. Press Ctrl+C to stop.")
-            plt.show()
-        except Exception as e:
-            print(f"Error starting constellation diagram: {e}")
-            self.stop()
+        # Signal end of run to trigger next cycle
+        self.end_of_run.emit()
     
     def stop(self):
-        """Stop the live animation."""
-        if self.animation and self.running:
-            try:
-                self.animation.event_source.stop()
-                self.running = False
-                if self.fig is not None:
-                    plt.close(self.fig)
-                print("Live plotting stopped.")
-            except Exception as e:
-                print(f"Error stopping animation: {e}")
-        elif not self.running:
-            print("No active animation to stop.")
+        """Stop the worker."""
+        self.running = False
+
+
+
+
+class LiveSDRPlotter(QMainWindow):
+    """
+    Real-time SDR signal visualization window using PyQt6 and pyqtgraph.
     
-    def __del__(self):
-        """Cleanup on object deletion."""
-        try:
-            self.stop()
-        except:
-            pass
+    Displays:
+    - Time domain (I/Q components)
+    - Frequency spectrum (PSD)
+    - Waterfall/Spectrogram
+    - Constellation diagram
+    
+    Each plot has auto-range buttons for easy scaling.
+    """
+    
+    def __init__(self, config: Dict, data_queue: Queue):
+        """
+        Initialize the live plotter window.
+        
+        Args:
+            config: Configuration dictionary from config.yaml
+            data_queue: Thread-safe queue for receiving samples
+        """
+        super().__init__()
+        
+        self.config = config
+        self.data_queue = data_queue
+        
+        # Extract configuration
+        plotter_config = config.get('plotter', {})
+        self.sample_rate = float(config['modulation']['sample_rate'])
+        self.center_freq = float(plotter_config.get('center_freq', 866.5e6))
+        self.update_interval = int(plotter_config.get('update_interval', 100))
+        self.time_plot_samples = int(plotter_config.get('time_plot_samples', 500))
+        self.fft_size = int(plotter_config.get('psd_nperseg', 1024))
+        self.num_rows = int(plotter_config.get('num_rows', 200))
+        
+        # For auto-range calculations
+        self.spectrogram_min = -50
+        self.spectrogram_max = 0
+        
+        # Setup window
+        self.setWindowTitle("SDR Live Signal Analyzer")
+        self.setFixedSize(QSize(1400, 900))
+        
+        # Initialize UI
+        self._setup_ui()
+        
+        # Initialize worker thread
+        self._setup_worker()
+        
+        logging.info("LiveSDRPlotter initialized successfully")
+    
+    def _setup_ui(self):
+        """Setup the user interface with all plots and controls."""
+        
+        # Main layout
+        layout = QGridLayout()
+        
+        # ==================== Time Domain Plot ====================
+        self.time_plot = pg.PlotWidget(
+            labels={'left': 'Amplitude', 'bottom': 'Sample Index'},
+            title='Time Domain (I/Q)'
+        )
+        self.time_plot.setMouseEnabled(x=False, y=True)
+        self.time_plot.setYRange(-1.1, 1.1)
+        self.time_plot.addLegend()
+        
+        # Create plot curves for I and Q
+        self.time_curve_i = self.time_plot.plot([], pen='c', name='I (In-phase)')
+        self.time_curve_q = self.time_plot.plot([], pen='y', name='Q (Quadrature)')
+        
+        layout.addWidget(self.time_plot, 0, 0)
+        
+        # Time plot controls
+        time_controls = QVBoxLayout()
+        
+        btn_time_auto = QPushButton('Auto Range')
+        btn_time_auto.clicked.connect(lambda: self.time_plot.autoRange())
+        time_controls.addWidget(btn_time_auto)
+        
+        btn_time_adc = QPushButton('ADC Limits\n(-1 to +1)')
+        btn_time_adc.clicked.connect(lambda: self.time_plot.setYRange(-1.1, 1.1))
+        time_controls.addWidget(btn_time_adc)
+        
+        time_controls.addStretch()
+        layout.addLayout(time_controls, 0, 1)
+        
+        # ==================== Frequency Domain Plot ====================
+        self.freq_plot = pg.PlotWidget(
+            labels={'left': 'PSD (dB)', 'bottom': 'Frequency (MHz)'},
+            title='Power Spectral Density'
+        )
+        self.freq_plot.setMouseEnabled(x=False, y=True)
+        self.freq_plot.setYRange(-60, 10)
+        
+        self.freq_curve = self.freq_plot.plot([], pen='g')
+        
+        layout.addWidget(self.freq_plot, 1, 0)
+        
+        # Frequency plot controls
+        freq_controls = QVBoxLayout()
+        
+        btn_freq_auto = QPushButton('Auto Range')
+        btn_freq_auto.clicked.connect(lambda: self.freq_plot.autoRange())
+        freq_controls.addWidget(btn_freq_auto)
+        
+        freq_controls.addStretch()
+        layout.addLayout(freq_controls, 1, 1)
+        
+        # ==================== Waterfall Plot ====================
+        waterfall_layout = QHBoxLayout()
+        
+        self.waterfall_plot = pg.PlotWidget(
+            labels={'left': 'Time (rows)', 'bottom': 'Frequency Bin'},
+            title='Waterfall (Spectrogram)'
+        )
+        self.waterfall_image = pg.ImageItem(axisOrder='col-major')
+        self.waterfall_plot.addItem(self.waterfall_image)
+        self.waterfall_plot.setMouseEnabled(x=False, y=False)
+        
+        waterfall_layout.addWidget(self.waterfall_plot)
+        
+        # Colorbar for waterfall
+        self.colorbar = pg.HistogramLUTWidget()
+        self.colorbar.setImageItem(self.waterfall_image)
+        self.colorbar.item.gradient.loadPreset('viridis')
+        self.waterfall_image.setLevels((-50, 0))
+        
+        waterfall_layout.addWidget(self.colorbar)
+        
+        layout.addLayout(waterfall_layout, 2, 0)
+        
+        # Waterfall controls
+        waterfall_controls = QVBoxLayout()
+        
+        btn_waterfall_auto = QPushButton('Auto Range\n(±2σ)')
+        btn_waterfall_auto.clicked.connect(self._auto_range_waterfall)
+        waterfall_controls.addWidget(btn_waterfall_auto)
+        
+        waterfall_controls.addStretch()
+        layout.addLayout(waterfall_controls, 2, 1)
+        
+        # ==================== Constellation Plot ====================
+        self.constellation_plot = pg.PlotWidget(
+            labels={'left': 'Quadrature', 'bottom': 'In-phase'},
+            title='Constellation Diagram'
+        )
+        self.constellation_plot.setAspectLocked(True)
+        self.constellation_plot.setXRange(-1.5, 1.5)
+        self.constellation_plot.setYRange(-1.5, 1.5)
+        
+        self.constellation_scatter = pg.ScatterPlotItem(
+            size=3, pen=None, brush=pg.mkBrush(100, 200, 255, 120)
+        )
+        self.constellation_plot.addItem(self.constellation_scatter)
+        
+        layout.addWidget(self.constellation_plot, 3, 0)
+        
+        # Constellation controls
+        constellation_controls = QVBoxLayout()
+        
+        btn_const_auto = QPushButton('Auto Range')
+        btn_const_auto.clicked.connect(lambda: self.constellation_plot.autoRange())
+        constellation_controls.addWidget(btn_const_auto)
+        
+        btn_const_unit = QPushButton('Unit Circle\n(-1.5 to +1.5)')
+        btn_const_unit.clicked.connect(self._reset_constellation_range)
+        constellation_controls.addWidget(btn_const_unit)
+        
+        btn_const_clear = QPushButton('Clear Points')
+        btn_const_clear.clicked.connect(self._clear_constellation)
+        constellation_controls.addWidget(btn_const_clear)
+        
+        constellation_controls.addStretch()
+        layout.addLayout(constellation_controls, 3, 1)
+        
+        # ==================== Status Bar ====================
+        self.status_label = QLabel('Status: Waiting for data...')
+        self.status_label.setStyleSheet('color: #888; font-size: 10px;')
+        layout.addWidget(self.status_label, 4, 0)
+        
+        # FPS counter
+        self.fps_label = QLabel('FPS: --')
+        self.fps_label.setStyleSheet('color: #888; font-size: 10px;')
+        layout.addWidget(self.fps_label, 4, 1)
+        
+        # Set central widget
+        central_widget = QWidget()
+        central_widget.setLayout(layout)
+        self.setCentralWidget(central_widget)
+        
+        # For FPS calculation
+        self.last_update_time = time.time()
+        self.frame_count = 0
+    
+    def _setup_worker(self):
+        """Setup the worker thread for data processing."""
+        
+        # Create worker and thread
+        self.worker_thread = QThread()
+        self.worker_thread.setObjectName('PlotWorker_Thread')
+        
+        self.worker = LivePlotWorker(self.config, self.data_queue)
+        self.worker.moveToThread(self.worker_thread)
+        
+        # Connect signals to slots
+        self.worker.time_plot_update.connect(self._update_time_plot)
+        self.worker.freq_plot_update.connect(self._update_freq_plot)
+        self.worker.waterfall_plot_update.connect(self._update_waterfall_plot)
+        self.worker.constellation_plot_update.connect(self._update_constellation_plot)
+        self.worker.end_of_run.connect(self._on_worker_cycle_complete)
+        
+        # Start worker when thread starts
+        self.worker_thread.started.connect(self.worker.run)
+        self.worker_thread.start()
+    
+    # ==================== Plot Update Callbacks ====================
+    
+    def _update_time_plot(self, samples: np.ndarray):
+        """Update the time domain plot with new samples."""
+        self.time_curve_i.setData(samples.real)
+        self.time_curve_q.setData(samples.imag)
+    
+    def _update_freq_plot(self, freqs: np.ndarray, psd: np.ndarray):
+        """Update the frequency domain plot."""
+        self.freq_curve.setData(freqs, psd)
+    
+    def _update_waterfall_plot(self, spectrogram: np.ndarray):
+        """Update the waterfall/spectrogram plot."""
+        self.waterfall_image.setImage(spectrogram, autoLevels=False)
+        
+        # Calculate statistics for auto-range
+        sigma = np.std(spectrogram)
+        mean = np.mean(spectrogram)
+        self.spectrogram_min = mean - 2 * sigma
+        self.spectrogram_max = mean + 2 * sigma
+    
+    def _update_constellation_plot(self, symbols: np.ndarray):
+        """Update the constellation diagram."""
+        # Filter out zero values (unfilled buffer positions)
+        valid_symbols = symbols[symbols != 0]
+        if len(valid_symbols) > 0:
+            self.constellation_scatter.setData(
+                valid_symbols.real, 
+                valid_symbols.imag
+            )
+    
+    def _on_worker_cycle_complete(self):
+        """Called when worker completes one processing cycle."""
+        # Update FPS counter
+        self.frame_count += 1
+        current_time = time.time()
+        elapsed = current_time - self.last_update_time
+        
+        if elapsed >= 1.0:
+            fps = self.frame_count / elapsed
+            self.fps_label.setText(f'FPS: {fps:.1f}')
+            self.frame_count = 0
+            self.last_update_time = current_time
+        
+        self.status_label.setText('Status: Receiving data')
+        
+        # Schedule next worker run
+        QTimer.singleShot(self.update_interval, self.worker.run)
+    
+    # ==================== Control Button Callbacks ====================
+    
+    def _auto_range_waterfall(self):
+        """Auto-range the waterfall colormap based on signal statistics."""
+        self.waterfall_image.setLevels((self.spectrogram_min, self.spectrogram_max))
+        self.colorbar.setLevels(self.spectrogram_min, self.spectrogram_max)
+    
+    def _reset_constellation_range(self):
+        """Reset constellation plot to unit circle range."""
+        self.constellation_plot.setXRange(-1.5, 1.5)
+        self.constellation_plot.setYRange(-1.5, 1.5)
+    
+    def _clear_constellation(self):
+        """Clear the constellation diagram."""
+        self.constellation_scatter.setData([], [])
+        if hasattr(self, 'worker'):
+            self.worker.constellation_buffer.fill(0)
+            self.worker.constellation_index = 0
+    
+    # ==================== Lifecycle Methods ====================
+    
+    def close_all(self):
+        """Clean up resources and close the window."""
+        logging.info("Closing LiveSDRPlotter...")
+        
+        # Stop worker
+        if hasattr(self, 'worker'):
+            self.worker.stop()
+        
+        # Stop thread
+        if hasattr(self, 'worker_thread') and self.worker_thread.isRunning():
+            self.worker_thread.quit()
+            self.worker_thread.wait(2000)  # Wait up to 2 seconds
+        
+        # Close window
+        self.close()
+        
+        logging.info("LiveSDRPlotter closed successfully")
+    
+    def closeEvent(self, event):
+        """Handle window close event."""
+        self.close_all()
+        event.accept()

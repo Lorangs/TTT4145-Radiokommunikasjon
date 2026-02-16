@@ -1,6 +1,7 @@
 from scipy import signal
 import numpy as np
 from barker_code import BARKER_SYMBOLS
+import logging
 
 class BarkerDetector:
     def __init__(self, config: dict):
@@ -12,7 +13,7 @@ class BarkerDetector:
         """Set the noise floor in dB for adaptive thresholding."""
         self.noise_floor_dB = noise_floor_dB
 
-    def detect(self, received_signal: np.array) -> int:
+    def detect(self, received_signal: np.ndarray) -> int:
         """Detect Barker code in the received signal and return the index of the start of the code."""
         correlation = signal.correlate(received_signal, self.barker_code, mode='valid')
         correlation_abs = np.abs(correlation)
@@ -23,15 +24,16 @@ class BarkerDetector:
             return None
         return int(peak_index)
     
-    def add_barker_code(self, signal: np.array) -> np.array:
-        """Prepend Barker code to the middle of the signal."""
-        barker_start_index = len(signal) // 2
-        return np.concatenate((signal[:barker_start_index], self.barker_code, signal[barker_start_index:]))
+    def add_barker_code(self, signal: np.ndarray) -> np.ndarray:
+        """Add Barker code to the beginning of the signal."""
+        return np.concatenate((self.barker_code, signal))
     
-    def remove_barker_code(self, signal: np.array, barker_index_start: int) -> np.array:
-        """Remove Barker code from the signal given the starting index of the Barker code."""
-        barker_length = len(self.barker_code)
-        return np.concatenate((signal[:barker_index_start], signal[barker_index_start+barker_length:]))
+    def remove_barker_code(self, signal: np.ndarray, start_index: int) -> np.ndarray:
+        """Remove Barker code from the signal starting at the specified index."""
+        if start_index < 0 or start_index + len(self.barker_code) > len(signal):
+            logging.warning("Invalid start index for removing Barker code.")
+            return signal
+        return signal[start_index + len(self.barker_code):]
     
 if __name__ == "__main__":
 

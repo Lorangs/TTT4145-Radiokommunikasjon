@@ -1,6 +1,14 @@
+"""
+This module implements the RRCFilter class, which generates Root Raised Cosine (RRC) filter coefficients 
+based on the parameters specified in the configuration file. 
+The RRC filter is used for pulse shaping in digital communication systems to minimize inter-symbol interference (ISI). 
+The class also provides functionality to apply the filter to a signal and to 
+write the filter coefficients to a file for hardware implementation on an SDR.
+"""
 
+import logging 
 import numpy as np
-import logging
+
 
 class RRCFilter:
     """Class to generate and manage Root Raised Cosine (RRC) filters."""
@@ -12,30 +20,32 @@ class RRCFilter:
                 span (int): Filter span in symbols (number of symbol durations the filter covers).
                 sps (int): Samples per symbol (oversampling factor).
         """
-        self.hardware_filter_enabled = bool(config['radio']['rrc_filter_enable'])
+        self.hardware_filter_enabled = bool(config['filter']['hardware_filter_enable'])
         self.rx_bandwidth = int(float(config['receiver']['rx_bandwidth']))
         self.tx_bandwidth = int(float(config['transmitter']['tx_bandwidth']))
-        self.rolloff = float(config['modulation']['rrc_roll_off'])
+        self.rolloff = float(config['filter']['rrc_roll_off'])
         self.symbol_periode = 1 / float(config['modulation']['symbol_rate'])
         self.sps = int(config['modulation']['samples_per_symbol'])
-        self.filter_span = int(config['modulation']['rrc_filter_span'])
+        self.filter_span = int(config['filter']['rrc_filter_span'])
 
         self.time_vector, self.coefficients = self._generate_rrc_filter()
+
+        self.scale_factor = int(config['filter']['rrc_filter_scale_factor'])
+        self.coefficients = self.coefficients * self.scale_factor  # Scale filter coefficients to desired range
     
         if self.hardware_filter_enabled:
-            self.write_filter_to_file(config['radio']['rrc_filter'])
+            self.write_filter_to_file(config['filter']['hardware_filter'])
 
 
     def _generate_rrc_filter(self) -> np.ndarray:
         """Generate RRC filter coefficients using commpy."""
-        
 
         num_taps = self.filter_span * self.sps 
 
         sample_periode = self.symbol_periode / self.sps
 
         # If hardware filtering is enabled, the total number of filer
-        # coefficients must be divisible by 16
+        # coefficients must be divisible by 16.
         if self.hardware_filter_enabled:
             time_vector = np.arange(-num_taps//2 + 0.5, num_taps//2 + 0.5) * sample_periode
         else:
@@ -43,6 +53,7 @@ class RRCFilter:
         
         h = np.zeros_like(time_vector)
 
+        # Compute RRC filter coefficients using the standard formula fetched from Wikipedia.
         for i, t in enumerate(time_vector):
             if t == 0.0:
                 h[i] = 1 + self.rolloff * (4 / np.pi - 1)
@@ -64,7 +75,6 @@ class RRCFilter:
                 )
             
         h = h / np.sqrt(np.sum(h**2))  # Normalize filter coefficients to unit energy
-
         return time_vector, h
 
     def apply_filter(self, signal: np.ndarray) -> np.ndarray:
@@ -73,7 +83,17 @@ class RRCFilter:
         
 
     def write_filter_to_file(self, filename: str = "rrc_filter.ftr"):
-        """Write RRC filter coefficients to a file."""
+        """Write RRC filter coefficients to a file for hardware implementation. The file format is expected to be:
+            TX 3 GAIN 0 INT 2
+            RX 3 GAIN 0 DEC 2
+            BWTX <tx_bandwidth>
+            BWRX <rx_bandwidth>
+            <tx_coeff_1>,<rx_coeff_1>
+            <tx_coeff_2>,<rx_coeff_2>
+            ...
+             where the first 4 lines are header information for the SDR, and the subsequent lines contain the filter coefficients 
+             for TX and RX filters (which are the same for RRC)."""
+
         try:
             with open(filename, 'w') as f:
                 # write header
@@ -83,12 +103,11 @@ class RRCFilter:
                 f.write(f"BWRX {self.rx_bandwidth}\n")
 
                 # write coefficients
-                rrc_taps = self.coefficients * (2**15 - 1)  # Scale to 16-bit integer range
-                for tap in rrc_taps:
+                for tap in self.coefficients:
                     t = int(round(tap))
                     f.write(f"{t},{t}\n") 
         
-            logging.info(f"Filter coefficients successfully written to {filename}.")
+            logging.info(f"Filter coefficients successfully written to: {filename}.")
 
         except Exception as e:
             logging.error(f"Error writing filter coefficients to file: {e}")
@@ -98,6 +117,9 @@ class RRCFilter:
 
 if __name__ == "__main__":
     from yaml import safe_load
+    from scipy import signal
+    from sdr_plots import StaticSDRPlotter
+    from matplotlib.pyplot import show
 
     try:
         with open("setup/config.yaml", 'r') as f:
@@ -109,10 +131,8 @@ if __name__ == "__main__":
     # Example usage of RRCFilter
     rrc_filter = RRCFilter(config)
 
-    from scipy import signal
     rc = signal.convolve(rrc_filter.coefficients, rrc_filter.coefficients, mode='same')
     
-    from sdr_plots import StaticSDRPlotter
     plotter = StaticSDRPlotter()
 
     plotter.plot_filter_response(rrc_filter.coefficients, 
@@ -167,7 +187,6 @@ if __name__ == "__main__":
                                         title="Generated Raised Cosine Filter Response (TX*RX)")
         
 
-    from matplotlib.pyplot import show
     show()
 
 

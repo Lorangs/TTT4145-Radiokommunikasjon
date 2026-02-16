@@ -20,11 +20,7 @@ class SDRTransciever:
   
     def __del__(self):
         """Destructor to ensure SDR is disconnected."""
-        if self.sdr:
-            self.sdr.tx_destroy_buffer() # Ensure TX buffer is destroyed
-            del self.sdr
-            self.sdr = None
-            logging.info("SDR Transciever resources cleaned up.")
+        self.disconnect()
 
     def connect(self):
         """Connect to Adalm Pluto SDR and configure."""
@@ -61,9 +57,9 @@ class SDRTransciever:
             logging.info(f"RX Buffer Size\t: {self.sdr.rx_buffer_size} samples")
             
             # set TX and RX filter
-            if self.config['radio']['rrc_filter_enable']:
-                self.sdr.filter = str(self.config['radio']['rrc_filter']).strip()
-                logging.info(f"RRC Filter\t: Hardware filtering enabled. Filter file: {self.config['radio']['rrc_filter']}")
+            if self.config['filter']['hardware_filter_enable']:
+                self.sdr.filter = str(self.config['filter']['hardware_filter_file']).strip()
+                logging.info(f"RRC Filter\t: Hardware filtering enabled. Filter file: {self.config['filter']['hardware_filter_file']}")
             else:
                 logging.info("RRC Filter\t: Software filtering enabled.")
             return True
@@ -71,6 +67,23 @@ class SDRTransciever:
         except Exception as e:
             logging.error(f"Error connecting to SDR: {e}")
             return False
+        
+    def disconnect(self):
+        """Disconnect from SDR and clean up resources."""
+        if self.sdr:
+            self.sdr.tx_destroy_buffer() # Ensure TX buffer is destroyed
+            del self.sdr
+            self.sdr = None
+            logging.info("Disconnected from SDR and cleaned up resources.")
+
+    def send_signal(self, signal: np.array):
+        """Send a raw signal through the SDR immediately."""
+        try:
+            self.sdr.tx_destroy_buffer()  # Clear any existing data in the SDR's transmission buffer
+            self.sdr.tx(signal) * (2**14)  # Scale signal back to int16 range for transmission
+        except Exception as e:
+            raise Exception(f"Failed to send signal through SDR: {e}")
+            
 
     def measure_noise_floor_dB(self) -> float:
         """Measure the noise floor in dB by taking the average power of received samples."""

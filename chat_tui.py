@@ -20,9 +20,7 @@ class ChatTUI:
         Args:
             max_display_messages: Maximum messages to display on screen
         """
-        self.max_display_messages = int(config['radio']['display_number_of_messages'])
-        self.messages: deque[str] = deque(maxlen=self.max_display_messages)  # Store recent messages for display
-
+        self.messages: deque[str] = deque(maxlen=int(config['radio']['queue_size']) ) # Store recent messages for display
         logging.info("Chat TUI initialized.")
 
     def __del__(self):
