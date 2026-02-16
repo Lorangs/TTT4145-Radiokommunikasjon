@@ -1,3 +1,12 @@
+"""
+Simple tester for the SDR transceiver system. This script utilizes the 
+SDR Adalm Pluto Cyclic TX buffer feature to transmit a known test message repeatedly, 
+while the receiver captures the signal and plots its characteristics.
+
+Perfect for testing end to end functionality of each module.
+"""
+
+
 from yaml import safe_load
 import numpy as np
 from sdr_transciever import SDRTransciever

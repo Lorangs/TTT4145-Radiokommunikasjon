@@ -1,9 +1,6 @@
 import numpy as np
 from dataclasses import dataclass
-
-
 from barker_code import BARKER_BITS
-
 from enum import Enum
 
 class msgType(Enum):
