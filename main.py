@@ -36,15 +36,21 @@ from barker_detection import BarkerDetector
 from synchronize import Synchronizer
 
 
-# Optional imports for debug mode
+# ================= read configuration file =================
 try:
+    with open("setup/config.yaml", 'r') as f:
+        config = safe_load(f)
+except Exception as e:
+    print(f"Error loading config file: {e}")
+    raise e
+
+# Optional imports for debug mode
+if config.get('radio', {}).get('debug_mode', False):
     from sdr_plots import LiveSDRPlotter, LiveSDRPlotterMultiWindow, StaticSDRPlotter, StaticPlotSignaler
     from matplotlib.pyplot import show
     from PyQt6.QtWidgets import QApplication
     from PyQt6.QtCore import QTimer
-    HAS_PLOTTER = True
-except ImportError:
-    HAS_PLOTTER = False
+else:
     LiveSDRPlotter = None
     LiveSDRPlotterMultiWindow = None
     StaticPlotSignaler = None
@@ -52,17 +58,8 @@ except ImportError:
 
 
 class SDRChatApp:
-    def __init__(self, config_file: str ="setup/config.yaml"):
+    def __init__(self, config_file: Dict):
         """Initialize the SDR Chat Application."""
-
-        # ================= read configuration file =================
-        try:
-            with open(config_file, 'r') as f:
-                config = safe_load(f)
-        except Exception as e:
-            print(f"Error loading config file: {e}")
-            raise e
-
         self.config: Dict = config
 
         # ================= Initialize Modules with configuration =================
@@ -106,13 +103,9 @@ class SDRChatApp:
         self.static_plotter= StaticSDRPlotter()  # For static plots of filter response, constellation, etc.
         self.static_plot_queue: Queue[Dict[str, np.ndarray]] = Queue(maxsize=8)  # Queue for static plot data (e.g., filter response, constellation points)
 
-        # Initialize plotter if debug mode is enabled
-        if self.debug_mode and HAS_PLOTTER:
+        if self.debug_mode:
             logging.info("Debug mode enabled - initializing live plotter")
             self._init_plotter()
-        elif self.debug_mode and not HAS_PLOTTER:
-            logging.warning("Debug mode enabled but PyQt6/pyqtgraph not available")
-            self.debug_mode = False
         
                 
         # ====================== Setup signal handlers for graceful shutdown =====================
@@ -122,104 +115,7 @@ class SDRChatApp:
         
         logging.info("SDR Chat Application initialized successfully.")
 
-    def __del__(self):
-        """Fallback cleanup if explicit cleanup wasn't called."""
-        if not hasattr(self, '_cleaned_up'):
-            try:
-                self._cleanup()
-            except:
-                pass  # Silence errors in __del__
-
-    def _signal_handler(self, signum, frame):
-        """Handle termination signals for graceful shutdown."""
-        logging.info(f"Signal {signum} received. Initiating graceful shutdown...")
-        self.running = False
-
-    def _cleanup(self):
-        """Clean up resources, stop threads, and disconnect SDR. This function is designed to be idempotent and can be safely called multiple times."""
-        try:
-            if not hasattr(self, '_cleaned_up'):
-                self._cleaned_up = True  # Ensure cleanup only runs once
-                logging.info("Starting cleanup...")
-
-                # 1. Stop all threads and signal them to shutdown
-                if hasattr(self, 'running'):
-                    self.running = False  # Signal threads to stop
-
-                # 2. Close debug plots before joining threads
-                if hasattr(self, 'plotter') and self.plotter is not None:
-                    try:
-                        self.plotter.close_all()
-                        logging.info("Closed debug plot windows.")
-                    except Exception as e:
-                        logging.error(f"Error closing debug plot windows: {e}")
-
-                # 3. Clean up queues
-                if hasattr(self, 'rx_queue'):
-                    while not self.rx_queue.empty():
-                        try:
-                            self.rx_queue.get_nowait()
-                        except Empty:
-                            break
-                if hasattr(self, 'tx_queue'):
-                    while not self.tx_queue.empty():
-                        try:
-                            self.tx_queue.get_nowait()
-                        except Empty:
-                            break
-
-                # 4. Join threads with timeout
-                threads = [
-                    ('RX', self.rx_thread),
-                    ('TX', self.tx_thread),
-                    ('TUI', self.tui_thread)
-                ]
-
-                for thread_name, thread in threads:
-                    if thread is not None and thread.is_alive():
-                        logging.info(f"Waiting for {thread_name} thread to finish...")
-                        thread.join(timeout=5.0)
-                        if thread.is_alive():
-                            logging.warning(f"{thread_name} thread did not stop gracefully")
-                        else:
-                            logging.info(f"{thread_name} thread stopped")
-                
-                # 5. Disconnect SDR
-                if hasattr(self, 'sdr') and self.sdr is not None:
-                    try:
-                        self.sdr.disconnect()
-                        logging.info("SDR disconnected successfully.")
-                    except Exception as e:
-                        logging.error(f"Error disconnecting SDR: {e}")
-
-                # 6. delete filter file if it exists
-                if hasattr(self.matched_filter, 'hardware_filter_enable') and self.matched_filter.hardware_filter_enable:
-                    filter_file = self.config['radio']['hardware_filter_file']
-                    if os.path.exists(filter_file):
-                        os.remove(filter_file)
-                        logging.info(f"Deleted temporary filter file: {filter_file}")
-
-                # 7. Close log files
-                if hasattr(self, 'log_file'):
-                    try:
-                        with open(self.log_file, 'a') as f:
-                            f.write(f"\n--- Chat Session Ended at {datetime.now().strftime('%H:%M:%S')} ---\n")
-                    except Exception as e:
-                        logging.error(f"Error closing chat log: {e}")
-
-                # Force flush logging handlers
-                for handler in logging.root.handlers[:]:
-                    try:
-                        handler.flush()
-                        handler.close()
-                    except:
-                        pass
-
-                logging.info("Cleanup completed successfully.")
-        except Exception as e:
-            logging.error(f"Error during application cleanup: {e}")
-
-
+   
     # ================= Start and Stop of sub threads =================
     def start(self):
         """Start the SDR Chat Application."""
@@ -249,17 +145,17 @@ class SDRChatApp:
 
         # Wait for threads to finish
         if self.rx_thread and self.rx_thread.is_alive():
-            self.rx_thread.join(timeout=2)
+            self.rx_thread.join(timeout = 2)
             if self.rx_thread.is_alive():
                 logging.warning("RX thread did not stop in time")
                 
         if self.tx_thread and self.tx_thread.is_alive():
-            self.tx_thread.join(timeout=2)
+            self.tx_thread.join(timeout = 2)
             if self.tx_thread.is_alive():
                 logging.warning("TX thread did not stop in time")
                 
         if self.tui_thread and self.tui_thread.is_alive():
-            self.tui_thread.join(timeout=2)
+            self.tui_thread.join(timeout = 2)
             if self.tui_thread.is_alive():
                 logging.warning("TUI thread did not stop in time")
         
@@ -326,7 +222,6 @@ class SDRChatApp:
             self.static_plot_signaler.plot_requested.emit(plot_data)
 
 
-
     # ================= Message Handling =================
     def queue_ack(self, msg_id: np.uint8):
         """Send an ACK for the recieved datagram carrying its msg_id."""
@@ -374,6 +269,7 @@ class SDRChatApp:
                         self.plot_data_queue.put_nowait(filtered_signal.copy())
                     except Full:
                         pass  # Drop frame if plotter can't keep up
+                # ================================================================
 
                 synchronized_signal = self.synchronizer.synchronize(filtered_signal)
                 decimated_signal = self.modulation_protocol.downsample_symbols(synchronized_signal)
@@ -571,12 +467,111 @@ class SDRChatApp:
         logging.info("\n\n--- New Application Session Started ---")
         logging.info(f"Logging configured: level={debug_mode}, file={self.debug_file}")
 
+    # ================== Cleanup and Signal Handling ==================
+    def __del__(self):
+        """Fallback cleanup if explicit cleanup wasn't called."""
+        if not hasattr(self, '_cleaned_up'):
+            try:
+                self._cleanup()
+            except:
+                pass  # Silence errors in __del__
+
+    def _signal_handler(self, signum, frame):
+        """Handle termination signals for graceful shutdown."""
+        logging.info(f"Signal {signum} received. Initiating graceful shutdown...")
+        self.running = False
+
+    def _cleanup(self):
+        """Clean up resources, stop threads, and disconnect SDR. This function is designed to be idempotent and can be safely called multiple times."""
+        try:
+            if not hasattr(self, '_cleaned_up'):
+                self._cleaned_up = True  # Ensure cleanup only runs once
+                logging.info("Starting cleanup...")
+
+                # 1. Stop all threads and signal them to shutdown
+                if hasattr(self, 'running'):
+                    self.running = False  # Signal threads to stop
+
+                # 2. Close debug plots before joining threads
+                if hasattr(self, 'plotter') and self.plotter is not None:
+                    try:
+                        self.plotter.close_all()
+                        logging.info("Closed debug plot windows.")
+                    except Exception as e:
+                        logging.error(f"Error closing debug plot windows: {e}")
+
+                # 3. Clean up queues
+                if hasattr(self, 'rx_queue'):
+                    while not self.rx_queue.empty():
+                        try:
+                            self.rx_queue.get_nowait()
+                        except Empty:
+                            break
+                if hasattr(self, 'tx_queue'):
+                    while not self.tx_queue.empty():
+                        try:
+                            self.tx_queue.get_nowait()
+                        except Empty:
+                            break
+
+                # 4. Join threads with timeout
+                threads = [
+                    ('RX', self.rx_thread),
+                    ('TX', self.tx_thread),
+                    ('TUI', self.tui_thread)
+                ]
+
+                for thread_name, thread in threads:
+                    if thread is not None and thread.is_alive():
+                        logging.info(f"Waiting for {thread_name} thread to finish...")
+                        thread.join(timeout=5.0)
+                        if thread.is_alive():
+                            logging.warning(f"{thread_name} thread did not stop gracefully")
+                        else:
+                            logging.info(f"{thread_name} thread stopped")
+                
+                # 5. Disconnect SDR
+                if hasattr(self, 'sdr') and self.sdr is not None:
+                    try:
+                        self.sdr.disconnect()
+                        logging.info("SDR disconnected successfully.")
+                    except Exception as e:
+                        logging.error(f"Error disconnecting SDR: {e}")
+
+                # 6. delete filter file if it exists
+                if hasattr(self.matched_filter, 'hardware_filter_enable') and self.matched_filter.hardware_filter_enable:
+                    filter_file = self.config['radio']['hardware_filter_file']
+                    if os.path.exists(filter_file):
+                        os.remove(filter_file)
+                        logging.info(f"Deleted temporary filter file: {filter_file}")
+
+                # 7. Close log files
+                if hasattr(self, 'log_file'):
+                    try:
+                        with open(self.log_file, 'a') as f:
+                            f.write(f"\n--- Chat Session Ended at {datetime.now().strftime('%H:%M:%S')} ---\n")
+                    except Exception as e:
+                        logging.error(f"Error closing chat log: {e}")
+
+                # Force flush logging handlers
+                for handler in logging.root.handlers[:]:
+                    try:
+                        handler.flush()
+                        handler.close()
+                    except:
+                        pass
+
+                logging.info("Cleanup completed successfully.")
+        except Exception as e:
+            logging.error(f"Error during application cleanup: {e}")
+
+
 
 
 if __name__ == "__main__":
     app = None
     try:
-        app = SDRChatApp()
+        app = SDRChatApp(config)
         if not app.start():
             logging.critical("Failed to start SDR Chat Application. Exiting.")
             sys.exit(1)

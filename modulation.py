@@ -42,7 +42,7 @@ class ModulationProtocol:
     
     
     # ================= Modulation and Demodulation =================
-    def modulate_message(self, message: Datagram) -> np.array:
+    def modulate_message(self, message: Datagram) -> np.ndarray:
         """Placeholder for modulation function based on modulation type."""
         
         if self.modulation_type == "BPSK":
@@ -52,7 +52,7 @@ class ModulationProtocol:
         else:
             raise NotImplementedError(f"Modulation type {self.modulation_type} not implemented.")
         
-    def demodulate_message(self, symbols: np.array) -> Datagram:
+    def demodulate_message(self, symbols: np.ndarray) -> Datagram:
         """Placeholder for demodulation function based on modulation type."""
         
         if self.modulation_type == "BPSK":
@@ -63,7 +63,7 @@ class ModulationProtocol:
             raise NotImplementedError(f"Demodulation type {self.modulation_type} not implemented.")
         
         
-    def _bpsk_modulate(self, message: Datagram) -> np.array:
+    def _bpsk_modulate(self, message: Datagram) -> np.ndarray:
         """BPSK modulation of the message bytes."""
 
         # Convert Datagram to bytes and then to bits
@@ -73,7 +73,7 @@ class ModulationProtocol:
         # Map bits to BPSK symbols: 0 -> 1, 1 -> -1
         return (2 * bits - 1).astype(np.int8)
     
-    def _bpsk_demodulate(self, symbols: np.array) -> Datagram:
+    def _bpsk_demodulate(self, symbols: np.ndarray) -> Datagram:
         """BPSK demodulation of the symbols to message bytes."""
 
         # Decision: symbols 
@@ -85,7 +85,7 @@ class ModulationProtocol:
         return Datagram.unpack(byte_array.tobytes())
     
 
-    def _qpsk_modulate(self, message: Datagram) -> np.array:
+    def _qpsk_modulate(self, message: Datagram) -> np.ndarray:
         """QPSK modulation of the message bytes."""
 
         # Convert Datagram to bytes and then to bits

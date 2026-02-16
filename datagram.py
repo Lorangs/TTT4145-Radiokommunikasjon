@@ -102,7 +102,7 @@ class Datagram():
 
     def pack(self) -> bytes:
         """Pack datagram into a single numpy array of uint8."""
-        return (self._msg_id.tobytes() +
+        return (self._msg_id.to_bytes(2, byteorder='big') +
                 bytes([self._msg_type.value]) + 
                 bytes([self._payload_size]) + 
                 self._payload.tobytes() + 

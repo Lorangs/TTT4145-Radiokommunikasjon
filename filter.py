@@ -21,8 +21,6 @@ class RRCFilter:
                 sps (int): Samples per symbol (oversampling factor).
         """
         self.hardware_filter_enable = bool(config['filter']['hardware_filter_enable'])
-        self.rx_bandwidth = int(float(config['receiver']['rx_bandwidth']))
-        self.tx_bandwidth = int(float(config['transmitter']['tx_bandwidth']))
         self.rolloff = float(config['filter']['rrc_roll_off'])
         self.symbol_periode = 1 / float(config['modulation']['symbol_rate'])
         self.sps = int(config['modulation']['samples_per_symbol'])
@@ -34,6 +32,8 @@ class RRCFilter:
         self.coefficients = self.coefficients * self.scale_factor  # Scale filter coefficients to desired range
     
         if self.hardware_filter_enable:
+            self.tx_bandwidth = int(float(config['transmitter']['tx_bandwidth']))
+            self.rx_bandwidth = int(float(config['receiver']['rx_bandwidth']))
             self.write_filter_to_file(config['filter']['hardware_filter_file'])
 
 
@@ -146,7 +146,7 @@ if __name__ == "__main__":
     
     print(f"RRC length:\t{len(rrc_filter.coefficients)}\nRRC energy:\t{np.sum(rrc_filter.coefficients**2):.4f}")
     print(f"RC length:\t{len(rc)}\nRC energy:\t{np.sum(rc**2):.4f}")
-    print(f"Time vector:\n{rrc_filter.time_vector}")
+    print(f"RTC: {rrc_filter.coefficients}")
 
     if rrc_filter.hardware_filter_enable:
         rx_generated_filter = []

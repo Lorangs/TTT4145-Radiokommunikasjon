@@ -263,6 +263,8 @@ class StaticSDRPlotter:
             ax.grid(True, alpha=0.3)
             ax.axis('equal')
             
+            ax.set_aspect('equal', adjustable='box')
+
             # Add reference circles
             max_val = max(np.abs(symbols.real).max(), np.abs(symbols.imag).max())
             ax.set_xlim(-max_val*1.2, max_val*1.2)
@@ -344,8 +346,6 @@ class StaticSDRPlotter:
                 raise ValueError(f"samples_per_symbol must be positive, got {samples_per_symbol}")
                 return None
             
-            fig, ax = plt.subplots(figsize=figsize)
-            
             # If complex, plot both I and Q
             if np.iscomplexobj(samples):
                 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize)
@@ -354,6 +354,7 @@ class StaticSDRPlotter:
                 self._plot_eye_single(samples.imag, samples_per_symbol, ax2, 
                                      num_traces, "Eye Diagram - Q")
             else:
+                fig, ax = plt.subplots(figsize=figsize)
                 self._plot_eye_single(samples, samples_per_symbol, ax, 
                                      num_traces, title)
             
@@ -375,7 +376,7 @@ class StaticSDRPlotter:
             start = i * samples_per_symbol
             end = start + 2 * samples_per_symbol
             if end <= len(samples):
-                ax.plot(time, samples[start:end], 'b-', alpha=0.1, linewidth=0.5)
+                ax.plot(time, samples[start:end], color='orange', alpha=0.5, linewidth=0.5)
         
         ax.set_xlabel('Symbol Period', fontsize=10)
         ax.set_ylabel('Amplitude', fontsize=10)
@@ -458,6 +459,13 @@ class StaticSDRPlotter:
         
 
 
+class StaticPlotSignaler(QObject):
+    """Helper class to signal main thread for static plot updates."""
+    plot_requested = pyqtSignal(dict)
+    
+    def __init__(self):
+        super().__init__()
+
 
 
 class LivePlotWorker(QObject):
@@ -498,7 +506,7 @@ class LivePlotWorker(QObject):
         # Data queue for receiving samples
         self.data_queue = data_queue
         
-        # Initialize spectrogram buffer (frequency bins x time rows)
+        # Initialize spectrogram buffer (frequency bins x num_rows)
         self.fft_size = self.psd_nperseg
         self.spectrogram = -50 * np.ones((self.fft_size, self.num_rows))
         
@@ -574,13 +582,6 @@ class LivePlotWorker(QObject):
         """Stop the worker."""
         self.running = False
 
-
-class StaticPlotSignaler(QObject):
-    """Helper class to signal main thread for static plot updates."""
-    plot_requested = pyqtSignal(dict)
-    
-    def __init__(self):
-        super().__init__()
 
 
 class LiveSDRPlotter(QMainWindow):
