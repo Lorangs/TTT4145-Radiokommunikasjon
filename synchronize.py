@@ -10,7 +10,6 @@ class Synchronizer:
         self.buffer_size = int(config['receiver']['buffer_size'])
         self.interpolation_factor = int(config['synchronization']['interpolation_factor'])
         self.sample_rate = self.sps * int(float(config['modulation']['symbol_rate']))
-        self.coarse_freq_search_factor = int(config['synchronization']['coarse_freq_search_factor'])
 
         if self.modulation_scheme == 'BPSK':
             self.modulation_order = 2.0
@@ -20,25 +19,26 @@ class Synchronizer:
             raise ValueError(f"Unsupported modulation scheme: {self.modulation_scheme}")
 
     def coarse_frequenzy_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
-        """Coarse frequency synchronization using FFT-based method."""
+        """Coarse frequency synchronization using FFT-based method.
+        Should be applied before timing synchronization.
+        """
+        nfft = 4096 # nfft = 4096 for frequenzy resolution of sample_rate/4096 ~ 500Hz for a sample rate of 2 MHz
 
-        signal_raised = received_signal**self.modulation_order # Remove modulation effects by raising to the power of the modulation order
+        raised_signal = received_signal**self.modulation_order # Remove modulation effects by raising to the power of the modulation order
 
-        magnitude = np.fft.fftshift(np.abs(np.fft.fft(signal_raised)))  
-
-        freqs = np.fft.fftshift(np.fft.fftfreq(len(signal_raised), d=1/self.sample_rate))
+        magnitude = np.fft.fftshift(np.abs(np.fft.fft(raised_signal, n=nfft)))  
+        freqs = np.fft.fftshift(np.fft.fftfreq(nfft, d=1/self.sample_rate))  # Frequency bins corresponding to the FFT output
 
         estimated_frequenzy_offset = freqs[np.argmax(magnitude)] / self.modulation_order # Divide by modulation order to get the actual frequency offset
         
         time_vector = np.arange(len(received_signal)) / self.sample_rate
-        
+        print(f"Estimated frequency offset: {estimated_frequenzy_offset:.2f} Hz")
         return received_signal * np.exp(-1j * 2 * np.pi * estimated_frequenzy_offset * time_vector)
     
     def fine_frequenzy_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
         """Fine frequency synchronization using a costas loop."""
+
         
-        
-    
     def delay_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
         """Delay synchronization using a matched filter for the known barker preamble."""
 
@@ -64,7 +64,7 @@ if __name__ == "__main__":
 
 
     # Example usage with a test signal
-    frequency_offset = 500
+    frequency_offset = 20000
     num_symbols = 100
     sps = synchronizer.sps
     sample_rate = synchronizer.sample_rate
