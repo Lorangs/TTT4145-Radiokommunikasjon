@@ -216,12 +216,15 @@ class StaticSDRPlotter:
             psd_db = 10 * np.log10(psd + 1e-12) # add small value to avoid log(0)
             
             # Adjust frequency axis if in baseband or passband
-            if center_freq > 0:
+            if np.max(freqs) > 1e6:
                 freqs = (freqs + center_freq) / 1e6  # MHz
                 xlabel = 'Frequency (MHz)'
-            else:
-                freqs = freqs / 1e3  # kHz
+            elif np.max(freqs) > 1e3:
+                freqs = (freqs + center_freq) / 1e3  # kHz
                 xlabel = 'Frequency (kHz)'
+            else:
+                freqs = freqs + center_freq  # Hz
+                xlabel = 'Frequency (Hz)'
             
             ax.plot(freqs, psd_db, linewidth=1)
             ax.set_xlabel(xlabel, fontsize=10)
