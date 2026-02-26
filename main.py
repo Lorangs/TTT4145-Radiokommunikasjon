@@ -224,7 +224,7 @@ class SDRChatApp:
 
     # ================= Message Handling =================
     def queue_ack(self, msg_id: np.uint8):
-        """Send an ACK for the recieved datagram carrying its msg_id."""
+        """Enqueue ACK for the recieved datagram carrying its msg_id."""
         try:
             ack_datagram = Datagram.as_ack(msg_id=msg_id)
             self.tx_queue.put(ack_datagram)
@@ -257,27 +257,25 @@ class SDRChatApp:
             try:
                 received_signal = self.sdr.sdr.rx()
 
-                if self.matched_filter.hardware_filter_enable:
-                    filtered_signal = received_signal  # Assume hardware filtering is applied by the SDR
-                else:
-                    filtered_signal = self.matched_filter.apply_filter(received_signal)
+                coarse_freq_adjusted = self.synchronizer.coarse_frequenzy_synchronization(received_signal)
+                filtered_signal = self.matched_filter.apply_filter(coarse_freq_adjusted)
+                time_adjusted = self.synchronizer.time_synchronization(filtered_signal)
+                fine_freq_adjusted = self.synchronizer.fine_frequenzy_synchronization(time_adjusted)
 
-                 # === Send data to plotter if debug mode is enabled ===
+                barker_index = self.barker_detector.detect(fine_freq_adjusted)
+
+                # === Send data to plotter if debug mode is enabled ===
                 if self.debug_mode and self.plotter is not None:
                     try:
                         # Non-blocking put - drop if queue is full
-                        self.plot_data_queue.put_nowait(filtered_signal.copy())
+                        self.plot_data_queue.put_nowait(fine_freq_adjusted.copy())
                     except Full:
                         pass  # Drop frame if plotter can't keep up
                 # ================================================================
 
-                synchronized_signal = self.synchronizer.synchronize(filtered_signal)
-                decimated_signal = self.modulation_protocol.downsample_symbols(synchronized_signal)
-                barker_index = self.barker_detector.detect(decimated_signal)
-
                 if barker_index is not None:
                     try:
-                        recieved_signal = self.barker_detector.remove_barker_code(received_signal, barker_index)
+                        recieved_signal = self.barker_detector.remove_barker_symbols(received_signal, barker_index)
                         received_message = self.modulation_protocol.demodulate_message(recieved_signal)
                     except ValueError as e:
                         logging.warning(f"Message demodulation failed: {e}")
@@ -312,7 +310,7 @@ class SDRChatApp:
             try:
                 datagram: Datagram = self.tx_queue.get(timeout=0.1)  # Wait for message to send
                 modulated_signal = self.modulation_protocol.modulate_message(datagram)
-                signal_with_barker = self.barker_detector.add_barker_code(modulated_signal)
+                signal_with_barker = self.barker_detector.add_barker_symbols(modulated_signal)
                 upsampled_signal = self.modulation_protocol.upsample_symbols(signal_with_barker)
 
                 if self.matched_filter.hardware_filter_enable:

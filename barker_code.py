@@ -15,17 +15,23 @@ BARKER_BITS = {
 }
 
 BARKER_SYMBOLS = {
-    7: array([1, 1, 1, -1, -1, 1, -1], dtype=int8),
-    11: array([1, 1, 1, -1, -1, -1, 1, -1, -1, 1, -1], dtype=int8),
-    13: array([1, 1, 1, 1, 1, -1, -1, 1, 1, -1, 1, -1, 1], dtype=int8) 
+    'BPSK':{
+        7: array([1, 1, 1, -1, -1, 1, -1], dtype=int8),
+        11: array([1, 1, 1, -1, -1, -1, 1, -1, -1, 1, -1], dtype=int8),
+        13: array([1, 1, 1, 1, 1, -1, -1, 1, 1, -1, 1, -1, 1], dtype=int8) 
+    },
+    'QPSK':{
+        7: array([1+1j, 1+1j, 1+1j, -1-1j, -1-1j, 1+1j, -1-1j], dtype=complex),
+        11: array([1+1j, 1+1j, 1+1j, -1-1j, -1-1j, -1-1j, 1+1j, -1-1j, -1-1j, 1+1j, -1-1j], dtype=complex),
+        13: array([1+1j, 1+1j, 1+1j, 1+1j, 1+1j, -1-1j, -1-1j, 1+1j, 1+1j, -1-1j, 1+1j, -1-1j, 1+1j], dtype=complex)
+    }
 }
 
 
 
 if __name__ == "__main__":
-    for length in [7, 11, 13]:
-        bit_sequence = BARKER_BITS.get(length)
-        symbols = BARKER_SYMBOLS.get(length)
-        print(f"Barker code length: {length}")
-        print(f"Bit sequence (hex): {bit_sequence:04x}")
-        print(f"Symbols: {symbols}\n")
+    for modulation in BARKER_SYMBOLS.keys():
+        for length in [7, 11, 13]:
+            symbols = BARKER_SYMBOLS.get(modulation).get(length)
+            print(f"Barker code length: {length}")
+            print(f"Symbols: {symbols}\n")

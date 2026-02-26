@@ -1,5 +1,107 @@
 import numpy as np
 from scipy import signal
+from numba import njit
+
+@njit(cache=True, fastmath=True)
+def _time_sync_njit(samples: np.ndarray, 
+                    sps: int, Kp: float, 
+                    Ki: float) -> np.ndarray:
+        """
+        plain Python implementation of the Mueller and Müller timing synchronization algorithm, 
+        optimized with Numba's JIT compilation for performance.
+
+        Args:
+            samples: Input signal array after coarse frequency synchronization.
+            sps: Samples per symbol (oversampling factor).
+            Kp: Proportional gain for the timing error correction.
+            Ki: Integral gain for the timing error correction.
+        Returns:
+            Array of samples resampled at the symbol rate, with timing errors corrected.
+        """
+        mu = 0.0  # Fractional interval between samples, initialized to 0 (start at the first sample)
+        omega = sps  # Initial estimate of rate of change of mu
+        i = 1  # need margin for cubic interpolation
+        N = len(samples) - 2
+
+        prev_sample = np.complex64(0.0)
+        prev_decision = np.complex64(0.0)
+        out = [prev_sample]
+
+        while i < N:
+            xn1 = samples[i - 1]
+            x0  = samples[i]
+            x1  = samples[i + 1]
+            x2  = samples[i + 2]
+
+            # Cubic interpolation coefficients (Farrow structure)
+            # Replaces np.dot(h, xvec) with explicit arithmetic
+            v0 =  x0                                          # h0 = [0, 1, 0, 0]
+            v1 = -xn1/3 - x0/2 + x1   - x2/6                # h1 = [-1/3, -0.5, 1, -1/6]
+            v2 =  xn1/2 - x0   + x1/2                        # h2 = [0.5, -1, 0.5, 0]
+            v3 = -xn1/6 + x0/2 - x1/2 + x2/6                # h3 = [-1/6, 0.5, -0.5, 1/6]
+
+            current_sample = np.complex64(
+                v0 + mu * (v1 + mu * (v2 + mu * v3))
+            )
+
+            current_decision = (
+                  np.sign(current_sample.real)  +
+                  np.sign(current_sample.imag)*1j
+            )
+
+            # Mueller & Müller timing error
+            error = np.real(
+                prev_decision * current_sample -
+                current_decision * prev_sample
+            )
+
+            omega += Ki * error
+
+            # Limit omega to prevent it from diverging too much
+            if omega > sps + 0.5:
+                omega = sps + 0.5
+            elif omega < sps - 0.5:
+                omega = sps - 0.5
+
+            mu += omega + Kp * error
+
+            prev_sample = current_sample
+            prev_decision = current_decision
+
+            out.append(current_sample)
+
+            step = int(np.floor(mu))
+            i += step
+            mu -= step  # Remove the integer part from mu to keep it in the range [0, 1)
+
+        return np.array(out)
+
+@njit(cache=True, fastmath=True)
+def _costas_loop_njit(received_signal: np.ndarray,
+                      alpha: float,
+                      beta:float,
+                      modulation_order: int) -> np.ndarray:
+    """Costas loop implementation optimized with Numba's JIT compilation for performance."""
+    phase = 0.0     # [radians] 
+    freq = 0.0      # [radians/sample] 
+    out = np.zeros_like(received_signal, dtype=np.complex64)
+
+    N = len(received_signal)
+    for i in range(N):
+        out[i] = received_signal[i] * np.exp(-1j * phase)
+        sample = out[i]
+
+        if modulation_order == 2:   # BPSK
+            error = sample.real * sample.imag
+        else:                       # QPSK
+            error = np.sign(sample.real) * sample.imag - np.sign(sample.imag) * sample.real
+        
+        freq += beta * error
+        phase += freq + alpha * error
+
+        # Keep phase in the range [0, 2*pi) to prevent numerical issues
+        phase = phase % (2 * np.pi)
+    return out
 
 
 
@@ -19,13 +121,16 @@ class Synchronizer:
         
         
         if self.modulation_scheme == 'BPSK':
-            self.modulation_order = 2.0
-            self.costas_error = self._costas_error_bpsk
+            self.modulation_order = 2.0    
         elif self.modulation_scheme == 'QPSK':
             self.modulation_order = 4.0
-            self.costas_error = self._costas_error_qpsk
         else:
             raise ValueError(f"Unsupported modulation scheme: {self.modulation_scheme}")
+        
+        # compile the Numba-optimized functions with the specified parameters
+        _time_sync_njit(np.zeros(self.buffer_size, dtype=np.complex64), self.sps, self.mm_Kp, self.mm_Ki)
+        _costas_loop_njit(np.zeros(self.buffer_size, dtype=np.complex64), self.costas_alpha, self.costas_beta, self.modulation_order)
+
 
     def coarse_frequenzy_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
         """Coarse frequency synchronization using FFT-based method.
@@ -42,107 +147,24 @@ class Synchronizer:
         time_vector = np.arange(len(received_signal)) / self.sample_rate
         print(f"Estimated frequency offset: {estimated_frequenzy_offset:.2f} Hz")
         return received_signal * np.exp(-1j * 2 * np.pi * estimated_frequenzy_offset * time_vector)
-    
-    def _costas_error_bpsk(self, sample: np.complex64) -> float:
-        """Pointer function for Costas loop error calculation for BPSK modulation."""
-        return np.real(sample) * np.imag(sample)
-    
-    def _costas_error_qpsk(self, sample: np.complex64) -> float:
-        """Pointer function for Costas loop error calculation for QPSK modulation."""
-        return np.sign(sample.real) * sample.imag - np.sign(sample.imag) * sample.real
+
     
     def fine_frequenzy_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
         """Fine frequency synchronization using a costas loop."""
-        phase = 0.0     # [radians] 
-        freq = 0.0      # [radians/sample] 
-        out = np.zeros_like(received_signal, dtype=np.complex64)
-
-        N = len(received_signal)
-        for i in range(N):
-            out[i] = received_signal[i] * np.exp(-1j * phase)
-            error = self.costas_error(out[i])
-
-            freq += self.costas_beta * error
-            phase += freq + self.costas_alpha * error
-
-            # Keep phase in the range [0, 2*pi) to prevent numerical issues
-            phase = phase % (2 * np.pi)
-        return out
-
-        
-    def mm_decision(self, sample: np.complex64) -> np.complex64:
-        # QPSK decision (works for BPSK too)
-        return np.sign(sample.real) + 1j*np.sign(sample.imag)
-
-    def mm_interpolate(self, x: np.ndarray, i: int, mu: float) -> float:
-        """Cubic interpolation. Dynamically computes the interpolated value at position i + mu using the four surrounding samples.
-        Args:    
-            x: Input signal array.
-            i: Current integer sample index (must be >= 2 and <= len(x)-3 to allow for 4 samples).
-            mu: Fractional offset (0 <= mu < 1) indicating how far between x[i] and x[i+1] the interpolation should occur.
-        Returns:    
-            Interpolated value at position i + mu.
-        """
-        x0 = x[i-1]
-        x1 = x[i]
-        x2 = x[i+1]
-        x3 = x[i+2]
-
-        a = (-0.5*x0) + (1.5*x1) - (1.5*x2) + (0.5*x3)
-        b = x0 - (2.5*x1) + (2*x2) - (0.5*x3)
-        c = (-0.5*x0) + (0.5*x2)
-        d = x1
-
-        return a*mu**3 + b*mu**2 + c*mu + d
+        return _costas_loop_njit(received_signal, self.costas_alpha, self.costas_beta, self.modulation_order)
 
     # Source: https://wirelesspi.com/mueller-and-muller-timing-synchronization-algorithm/ 
     def time_synchronization(self, samples: np.ndarray) -> np.ndarray:
         """Mueller and Müller timing synchronization algorithm.
         Should be applied after coarse frequency synchronization.
+        Be aware that this algorithm decimates the signal by a factor of sps.
+        
         Args:
             samples: Input signal array after coarse frequency synchronization.
         Returns:
             Array of samples resampled at the symbol rate, with timing errors corrected.
         """
-        mu = 0.0  # Fractional interval between samples, initialized to 0 (start at the first sample)
-        omega = self.sps  # Initial estimate of rate of change of mu
-        i = 2  # need margin for cubic interp
-        N = len(samples) - 3
-
-        prev_sample = self.mm_interpolate(samples, 1, mu)
-        prev_decision = self.mm_decision(prev_sample)
-
-        out = [prev_sample]
-
-        while i < N:
-            current_sample = self.mm_interpolate(samples, i, mu)
-            current_decision = self.mm_decision(current_sample)
-
-            # Mueller & Müller timing error
-            error = np.real(
-                prev_decision * current_sample -
-                current_decision * prev_sample
-            )
-
-            # Update omega (frequency term)
-            omega += self.mm_Ki * error
-
-            # clamp omega to prevent it from diverging
-            omega = np.clip(omega, self.sps - 0.5, self.sps + 0.5)
-
-            # Update phase
-            mu += omega + self.mm_Kp * error
-
-            prev_sample = current_sample
-            prev_decision = current_decision
-
-            out.append(current_sample)
-
-            step = int(np.floor(mu))
-            i += step
-            mu -= step  # Remove the integer part from mu to keep it in the range [0, 1)
-
-        return np.array(out)
+        return _time_sync_njit(samples, self.sps, self.mm_Kp, self.mm_Ki)
 
             
 
