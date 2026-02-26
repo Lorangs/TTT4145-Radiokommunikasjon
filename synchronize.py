@@ -46,11 +46,11 @@ class Synchronizer:
     def fine_frequenzy_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
         """Fine frequency synchronization using a costas loop."""
         
-    def decision(self, sample):
+    def decision(self, sample: np.complex64) -> np.complex64:
         # QPSK decision (works for BPSK too)
         return np.sign(sample.real) + 1j*np.sign(sample.imag)
 
-    def interpolate(self, x, i, mu):
+    def interpolate(self, x: np.ndarray, i: int, mu: float) -> float:
         """Cubic interpolation. Dynamically computes the interpolated value at position i + mu using the four surrounding samples.
         Args:    
             x: Input signal array.
@@ -93,9 +93,15 @@ class Synchronizer:
                 self.prev_decision * current_sample -
                 current_decision * self.prev_sample
             )
+            # Guard against NaN or infinite error.
+            if not np.isfinite(error):
+                error = 0.0
 
             # Update omega (frequency term)
             self.mm_omega += self.mm_Ki * error
+
+            # clamp omega to prevent it from diverging
+            self.mm_omega = np.clip(self.mm_omega, self.sps - 0.5, self.sps + 0.5)
 
             # Update phase
             self.mm_mu += self.mm_omega + self.mm_Kp * error
@@ -104,13 +110,10 @@ class Synchronizer:
             self.prev_sample = current_sample
             self.prev_decision = current_decision
 
-            # Move by floor(omega)
-            step = int(np.floor(self.mm_omega))
-
             out.append(current_sample)
 
             # Move by floor(omega)
-            step = int(np.floor(self.mm_omega))
+            step = int(np.floor(self.mm_mu))
             i += step
             self.mm_mu -= step  # Remove the integer part from mu
 
@@ -166,12 +169,25 @@ if __name__ == "__main__":
         title="Constellation of Test Signal Before Timing Synchronization"
     )
 
+    plotter.plot_time_domain(
+        test_signal,
+        sample_rate=sample_rate,
+        title="Time Domain of Test Signal Before Timing Synchronization"
+    )
+
     corrected_signal = synchronizer.mm_timing_synchronization(test_signal)
 
     plotter.plot_constellation(
         corrected_signal,
         title="Constellation of Test Signal After Timing Synchronization"
     )
+
+    plotter.plot_time_domain(
+        corrected_signal,
+        sample_rate=sample_rate,
+        title="Time Domain of Test Signal After Timing Synchronization"
+    )
+
     show()
 
 ##############################################################

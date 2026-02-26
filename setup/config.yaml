@@ -19,7 +19,7 @@ receiver:
   buffer_size: 32768                  # 2**15 samples      
 
 modulation:
-  type: "bpsk"                        # Modulation type: "BPSK", "QPSK", More to come
+  type: "qpsk"                        # Modulation type: "BPSK", "QPSK", More to come
   symbol_rate: 250e3                  # Symbols per second. symbol period = 1 / symbol_rate = 4 us
   samples_per_symbol: 8               # Samples per Symbol. Must be an integer. Determines the oversampling factor for pulse shaping and matched filtering.
   sample_rate: 2e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
