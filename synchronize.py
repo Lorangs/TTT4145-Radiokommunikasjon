@@ -11,19 +11,19 @@ class Synchronizer:
         self.sample_rate = self.sps * int(float(config['modulation']['symbol_rate']))
         self.nfft = int(config['synchronization']['nfft'])
         
-        
-        self.mm_mu = 0.0                                                        # Fractional interval [0, 1) for timing recovery
-        self.mm_omega = self.sps                                                # RX sps estimate
-        self.mm_prev_sample = 0
-        self.mm_prev_decision = 0 
         self.mm_Kp = float(config['synchronization']['mm_Kp'])
         self.mm_Ki = float(config['synchronization']['mm_Ki'])
+
+        self.costas_alpha = float(config['synchronization']['costas_alpha'])
+        self.costas_beta = float(config['synchronization']['costas_beta'])  
         
         
         if self.modulation_scheme == 'BPSK':
             self.modulation_order = 2.0
+            self.costas_error = self._costas_error_bpsk
         elif self.modulation_scheme == 'QPSK':
             self.modulation_order = 4.0
+            self.costas_error = self._costas_error_qpsk
         else:
             raise ValueError(f"Unsupported modulation scheme: {self.modulation_scheme}")
 
@@ -43,14 +43,38 @@ class Synchronizer:
         print(f"Estimated frequency offset: {estimated_frequenzy_offset:.2f} Hz")
         return received_signal * np.exp(-1j * 2 * np.pi * estimated_frequenzy_offset * time_vector)
     
+    def _costas_error_bpsk(self, sample: np.complex64) -> float:
+        """Pointer function for Costas loop error calculation for BPSK modulation."""
+        return np.real(sample) * np.imag(sample)
+    
+    def _costas_error_qpsk(self, sample: np.complex64) -> float:
+        """Pointer function for Costas loop error calculation for QPSK modulation."""
+        return np.sign(sample.real) * sample.imag - np.sign(sample.imag) * sample.real
+    
     def fine_frequenzy_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
         """Fine frequency synchronization using a costas loop."""
+        phase = 0.0     # [radians] 
+        freq = 0.0      # [radians/sample] 
+        out = np.zeros_like(received_signal, dtype=np.complex64)
+
+        N = len(received_signal)
+        for i in range(N):
+            out[i] = received_signal[i] * np.exp(-1j * phase)
+            error = self.costas_error(out[i])
+
+            freq += self.costas_beta * error
+            phase += freq + self.costas_alpha * error
+
+            # Keep phase in the range [0, 2*pi) to prevent numerical issues
+            phase = phase % (2 * np.pi)
+        return out
+
         
-    def decision(self, sample: np.complex64) -> np.complex64:
+    def mm_decision(self, sample: np.complex64) -> np.complex64:
         # QPSK decision (works for BPSK too)
         return np.sign(sample.real) + 1j*np.sign(sample.imag)
 
-    def interpolate(self, x: np.ndarray, i: int, mu: float) -> float:
+    def mm_interpolate(self, x: np.ndarray, i: int, mu: float) -> float:
         """Cubic interpolation. Dynamically computes the interpolated value at position i + mu using the four surrounding samples.
         Args:    
             x: Input signal array.
@@ -71,51 +95,52 @@ class Synchronizer:
 
         return a*mu**3 + b*mu**2 + c*mu + d
 
-    def mm_timing_synchronization(self, samples: np.ndarray) -> np.ndarray:
-
-        self.prev_sample = self.interpolate(samples, 1, self.mm_mu)
-        self.prev_decision = self.decision(self.prev_sample)
-
-        out = [self.prev_sample]
-
+    # Source: https://wirelesspi.com/mueller-and-muller-timing-synchronization-algorithm/ 
+    def time_synchronization(self, samples: np.ndarray) -> np.ndarray:
+        """Mueller and Müller timing synchronization algorithm.
+        Should be applied after coarse frequency synchronization.
+        Args:
+            samples: Input signal array after coarse frequency synchronization.
+        Returns:
+            Array of samples resampled at the symbol rate, with timing errors corrected.
+        """
+        mu = 0.0  # Fractional interval between samples, initialized to 0 (start at the first sample)
+        omega = self.sps  # Initial estimate of rate of change of mu
         i = 2  # need margin for cubic interp
-        n = len(samples) - 3
+        N = len(samples) - 3
 
-        while i < n:
-            # Interpolated symbol. 
-            current_sample = self.interpolate(samples, i, self.mm_mu)
+        prev_sample = self.mm_interpolate(samples, 1, mu)
+        prev_decision = self.mm_decision(prev_sample)
 
-            # Make decision
-            current_decision = self.decision(current_sample)
+        out = [prev_sample]
+
+        while i < N:
+            current_sample = self.mm_interpolate(samples, i, mu)
+            current_decision = self.mm_decision(current_sample)
 
             # Mueller & Müller timing error
             error = np.real(
-                self.prev_decision * current_sample -
-                current_decision * self.prev_sample
+                prev_decision * current_sample -
+                current_decision * prev_sample
             )
-            # Guard against NaN or infinite error.
-            if not np.isfinite(error):
-                error = 0.0
 
             # Update omega (frequency term)
-            self.mm_omega += self.mm_Ki * error
+            omega += self.mm_Ki * error
 
             # clamp omega to prevent it from diverging
-            self.mm_omega = np.clip(self.mm_omega, self.sps - 0.5, self.sps + 0.5)
+            omega = np.clip(omega, self.sps - 0.5, self.sps + 0.5)
 
             # Update phase
-            self.mm_mu += self.mm_omega + self.mm_Kp * error
+            mu += omega + self.mm_Kp * error
 
-            # Save previous values
-            self.prev_sample = current_sample
-            self.prev_decision = current_decision
+            prev_sample = current_sample
+            prev_decision = current_decision
 
             out.append(current_sample)
 
-            # Move by floor(omega)
-            step = int(np.floor(self.mm_mu))
+            step = int(np.floor(mu))
             i += step
-            self.mm_mu -= step  # Remove the integer part from mu
+            mu -= step  # Remove the integer part from mu to keep it in the range [0, 1)
 
         return np.array(out)
 
@@ -139,114 +164,60 @@ if __name__ == "__main__":
     plotter = StaticSDRPlotter()
     rrc_filter = RRCFilter(config).coefficients
 
-#############################################################
-# Test sequenze for timing synchronization
-# Uncomment to run the test sequenze. Make sure to have the config.yaml file properly set up and the required libraries installed.
-#############################################################
-    # generate test signal with timing offset
-    timing_offset = 0.3  # Fraction of a symbol period
-    num_symbols = 100
+    ##########################################
+    # Test signal Parameters
+    ##########################################
+    num_symbols = 1000
+    frequency_offset = 100  # [Hz]
+    timing_offset = 0.4  # [fraction of symbol period]
+
     sps = synchronizer.sps
     sample_rate = synchronizer.sample_rate
-    symbols = np.zeros(num_symbols*sps, dtype=np.complex64)
+    test_signal = np.zeros(num_symbols*sps, dtype=np.complex64)
+    time_vector = np.arange(len(test_signal)) / sample_rate
 
     modulation_scheme = config['modulation']['type'].upper().strip()
     if modulation_scheme == 'BPSK':
         print("Using BPSK modulation")
-        symbols[::sps] = 2*np.random.randint(0, 2, num_symbols) - 1
+        test_signal[::sps] = 2*np.random.randint(0, 2, num_symbols) - 1
     elif modulation_scheme == 'QPSK':
         print("Using QPSK modulation")
-        symbols[::sps] = (2*np.random.randint(0, 2, num_symbols) - 1) + 1j*(2*np.random.randint(0, 2, num_symbols) - 1)
+        test_signal[::sps] = (2*np.random.randint(0, 2, num_symbols) - 1) + 1j*(2*np.random.randint(0, 2, num_symbols) - 1)
     else:
         print(f"Unsupported modulation scheme: {modulation_scheme}")
         exit(1)
 
-    test_signal = np.convolve (symbols, rrc_filter, mode='same')
-    test_signal = np.roll(test_signal, int(timing_offset * sps))  # Introduce timing offset
+    # TX processing: pulse shaping, add frequency and timing offset
+    test_signal_pulse_shaped = np.convolve (test_signal, rrc_filter, mode='same') #  Apply pulse shaping
+    test_signal_freq_shift = test_signal_pulse_shaped * np.exp(1j * 2*np.pi * frequency_offset * time_vector)  # Add frequency offset
+    test_signal_time_shift = np.roll(test_signal_freq_shift, int(timing_offset * sps))  # Add timing offset
+    test_singal_awgn = test_signal_time_shift + 0.01*(np.random.randn(len(test_signal)) + 1j*np.random.randn(len(test_signal)))  # Additive white Gaussian noise
+
+
+    # RX processing: coarse frequency synchronization, matched filtering, fine frequency synchronization, timing synchronization
+    test_signal_coarse_freq_adjustd = synchronizer.coarse_frequenzy_synchronization(test_singal_awgn)  
+    test_signal_matched_filtered = np.convolve(test_signal_coarse_freq_adjustd, rrc_filter, mode='same')  # Matched filtering after coarse frequency synchronization    
+    test_signal_time_adjusted = synchronizer.time_synchronization(test_signal_matched_filtered)
+    test_signal_fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(test_signal_time_adjusted)
 
     plotter.plot_constellation(
-        test_signal,
-        title="Constellation of Test Signal Before Timing Synchronization"
+        test_signal_coarse_freq_adjustd,
+        title="Constellation After Coarse Frequency Synchronization"
     )
-
-    plotter.plot_time_domain(
-        test_signal,
-        sample_rate=sample_rate,
-        title="Time Domain of Test Signal Before Timing Synchronization"
-    )
-
-    corrected_signal = synchronizer.mm_timing_synchronization(test_signal)
 
     plotter.plot_constellation(
-        corrected_signal,
-        title="Constellation of Test Signal After Timing Synchronization"
+        test_signal_matched_filtered,
+        title="Constellation After Matched Filtering"
     )
 
-    plotter.plot_time_domain(
-        corrected_signal,
-        sample_rate=sample_rate,
-        title="Time Domain of Test Signal After Timing Synchronization"
+    plotter.plot_constellation(
+        test_signal_time_adjusted,
+        title="Constellation After Mueller and Muller Timing Synchronization"
     )
 
+    plotter.plot_constellation(
+        test_signal_fine_freq_adjusted,
+        title="Constellation After Costas Loop Frequency Synchronization"
+    )
     show()
-
-##############################################################
-# Test sequenze for coarse frequency synchronization
-# Uncomment to run the test sequenze. Make sure to have the config.yaml file properly set up and the required libraries installed.
-##############################################################
-"""
-
-
-    # Example usage with a test signal
-    frequency_offset = 20000
-    num_symbols = 100
-    sps = synchronizer.sps
-    sample_rate = synchronizer.sample_rate
-    symbols = np.zeros(num_symbols*sps, dtype=np.complex64)
     
-    modulation_scheme = config['modulation']['type'].upper().strip()
-    if modulation_scheme == 'BPSK':
-        print("Using BPSK modulation")
-        symbols[::sps] = 2*np.random.randint(0, 2, num_symbols) - 1
-    elif modulation_scheme == 'QPSK':
-        print("Using QPSK modulation")
-        symbols[::sps] = (2*np.random.randint(0, 2, num_symbols) - 1) + 1j*(2*np.random.randint(0, 2, num_symbols) - 1)
-    else:
-        print(f"Unsupported modulation scheme: {modulation_scheme}")
-        exit(1)
-    
-
-
-    test_signal = np.convolve (symbols, rrc_filter, mode='same') 
-
-    time_vector = np.arange(len(test_signal)) / synchronizer.sample_rate
-    test_signal *= np.exp(1j* 2 * np.pi * frequency_offset * time_vector)
-
-    plotter.plot_constellation(
-        test_signal,
-        title="Constellation of Test Signal with Frequency Offset"
-    )
-
-    plotter.plot_psd(
-        test_signal,
-        center_freq=frequency_offset,
-        sample_rate=synchronizer.sample_rate,
-        title="PSD of Test Signal with Frequency Offset"
-    )
-
-    corrected_signal = synchronizer.coarse_frequenzy_synchronization(test_signal)
-
-    plotter.plot_constellation(
-        corrected_signal,
-        title="Constellation of Corrected Signal after Coarse Frequency Synchronization"
-    )
-
-    plotter.plot_psd(
-        corrected_signal,
-        center_freq=0,
-        sample_rate=synchronizer.sample_rate,
-        title="PSD of Corrected Signal after Coarse Frequency Synchronization"
-    )
-
-    show()
-"""

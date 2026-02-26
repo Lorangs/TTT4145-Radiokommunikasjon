@@ -45,6 +45,8 @@ synchronization:
   mm_Ki: 0.005                        # Integral gain for Mueller and Muller timing synchronization loop. Calculated as: Ki = 4 * Bn^2 / Kd ( Kd is the gain of the timing error detector (Kd = d Expected[e] / d phi )). 
   mm_Kp: 0.0707                      # Proportional gain for Mueller and Muller timing synchronization loop. Calculated as: Kp = 4 * zeta * Bn / Kd ( Bn is the normalized loop bandwidth, zeta is the damping factor, typically set to 0.707 for critical damping). Adjust these gains based on the desired loop bandwidth and damping factor for optimal timing recovery performance.
                                       # Bn is the normalized loop bandwidth, defined as Bn = loop_noise_bandwidth / symbol_rate. A common choice for loop_noise_bandwidth is around 0.01 to 0.1 times the symbol rate, depending on the expected noise conditions and required responsiveness of the timing recovery loop.
+  costas_alpha: 0.2                 
+  costas_beta: 0.01            
 
 plotter:
   num_rows: 200                    # Number of rows in waterfall display
