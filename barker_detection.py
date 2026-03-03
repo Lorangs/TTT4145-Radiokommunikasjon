@@ -5,7 +5,17 @@ import logging
 
 class BarkerDetector:
     def __init__(self, config: dict):
-        self.barker_symbols = BARKER_SYMBOLS[int(config['barker_sequence']['code_length'])]
+        modulation_type = str(config['modulation']['type']).upper().strip()
+        code_length = int(config['barker_sequence']['code_length'])
+
+        try:
+            self.barker_symbols = BARKER_SYMBOLS[modulation_type][code_length]
+        except KeyError as exc:
+            raise ValueError(
+                f"Unsupported Barker configuration: modulation_type={modulation_type}, "
+                f"code_length={code_length}"
+            ) from exc
+
         self.correlation_scale_factor_threshold = float(config['barker_sequence']['correlation_scale_factor_threshold'])
         self.noise_floor_dB = None  # To be set after SDR connection
 
@@ -54,7 +64,9 @@ if __name__ == "__main__":
     
     # insert Barker code at a random position in the noise
     # SNR of around 1 dB for the Barker code
-    barker_symbols = 10**(-89/20) * BARKER_SYMBOLS[int(config['barker_sequence']['code_length'])]   
+    modulation_type = str(config['modulation']['type']).upper().strip()
+    code_length = int(config['barker_sequence']['code_length'])
+    barker_symbols = 10**(-89/20) * BARKER_SYMBOLS[modulation_type][code_length]
 
     insert_position = 500
     test_signal = noise.copy()
