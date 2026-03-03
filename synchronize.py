@@ -12,9 +12,9 @@ class Synchronizer:
     
     def coarse_time_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
         """Mueller and Muller (M&M) timing error detector for coarse time synchronization."""
-        if self.modulation_scheme == 'QPSK':
+        if self.modulation_scheme == 'BPSK':
             return self._bpsk_coarse_time_sync(received_signal)
-        elif self.modulation_scheme == 'BPSK':
+        elif self.modulation_scheme == 'QPSK':
             return self._qpsk_coarse_time_sync(received_signal)
         else:
             raise ValueError(f"Unsupported modulation scheme: {self.modulation_scheme}")

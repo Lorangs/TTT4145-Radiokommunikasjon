@@ -17,4 +17,4 @@ initial_tests/*
 __pycache__/
 
 #ignore filter coefficient files
-*.ftr
+*.ftr.env
