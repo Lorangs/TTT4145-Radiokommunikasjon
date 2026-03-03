@@ -28,8 +28,11 @@ class RRCFilter:
 
         self.time_vector, self.coefficients = self._generate_rrc_filter()
 
+
         self.scale_factor = int(config['filter']['rrc_filter_scale_factor'])
         self.coefficients = self.coefficients * self.scale_factor  # Scale filter coefficients to desired range
+        
+        self.rc_coefficients = np.convolve(self.coefficients, self.coefficients, mode='same')  # Combined transmit and receive filter response
     
         if self.hardware_filter_enable:
             self.tx_bandwidth = int(float(config['transmitter']['tx_bandwidth']))

@@ -23,17 +23,6 @@ class BarkerDetector:
         """Set the noise floor in dB for adaptive thresholding."""
         self.noise_floor_dB = noise_floor_dB
 
-    def detect(self, received_signal: np.ndarray) -> int:
-        """Detect Barker code in the received signal and return the index of the start of the code."""
-        correlation = signal.correlate(received_signal, self.barker_symbols, mode='valid')
-        correlation_abs = np.abs(correlation)
-        peak_index = np.argmax(correlation_abs)
-        peak_value = correlation_abs[peak_index]
-        threshold = self.correlation_scale_factor_threshold * self.noise_floor_dB if self.noise_floor_dB is not None else 0
-        if peak_value < threshold:
-            return None
-        return int(peak_index)
-    
     def add_barker_symbols(self, signal: np.ndarray) -> np.ndarray:
         """Add Barker code to the beginning of the signal."""
         return np.concatenate((self.barker_symbols, signal))

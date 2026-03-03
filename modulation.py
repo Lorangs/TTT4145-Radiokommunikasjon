@@ -36,9 +36,9 @@ class ModulationProtocol:
         upsampled[::self.sps] = symbols
         return upsampled
     
-    def downsample_symbols(self, symbols: np.array) -> np.array:
+    def downsample_symbols(self, symbols: np.array, delay: int) -> np.array:
         """Downsample symbols by taking every N-th sample."""
-        return symbols[::self.sps]
+        return symbols[delay::self.sps]
     
     
     # ================= Modulation and Demodulation =================
