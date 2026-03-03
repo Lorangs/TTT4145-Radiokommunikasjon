@@ -38,7 +38,7 @@ filter:
 
 barker_sequence:
   code_length: 13                     # Length of Barker code (choice: 7, 11 or 13)
-  correlation_scale_factor_threshold: 1.1             # Correlation threshold for preamble detection. Scale factor to acknowledge signal peaks above the noise floor. Adjust based on observed noise levels and signal strength.
+  correlation_threshold: 0.033          # Correlation threshold for preamble detection. Scale factor to acknowledge signal peaks above the noise floor. Adjust based on observed noise levels and signal strength.
 
 synchronization:
   nfft: 4096                         # FFT size for coarse frequency synchronization. 4096 provides a frequency resolution of sample_rate/nfft, which is approximately 500 Hz for a sample rate of 2 MHz. Adjust based on expected frequency offsets and desired resolution.
