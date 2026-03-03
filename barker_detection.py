@@ -5,7 +5,7 @@ import logging
 
 class BarkerDetector:
     def __init__(self, config: dict):
-        self.barker_code = BARKER_SYMBOLS[int(config['barker_sequence']['code_length'])]
+        self.barker_symbols = BARKER_SYMBOLS[int(config['barker_sequence']['code_length'])]
         self.correlation_scale_factor_threshold = float(config['barker_sequence']['correlation_scale_factor_threshold'])
         self.noise_floor_dB = None  # To be set after SDR connection
 
@@ -15,7 +15,7 @@ class BarkerDetector:
 
     def detect(self, received_signal: np.ndarray) -> int:
         """Detect Barker code in the received signal and return the index of the start of the code."""
-        correlation = signal.correlate(received_signal, self.barker_code, mode='valid')
+        correlation = signal.correlate(received_signal, self.barker_symbols, mode='valid')
         correlation_abs = np.abs(correlation)
         peak_index = np.argmax(correlation_abs)
         peak_value = correlation_abs[peak_index]
@@ -24,16 +24,16 @@ class BarkerDetector:
             return None
         return int(peak_index)
     
-    def add_barker_code(self, signal: np.ndarray) -> np.ndarray:
+    def add_barker_symbols(self, signal: np.ndarray) -> np.ndarray:
         """Add Barker code to the beginning of the signal."""
-        return np.concatenate((self.barker_code, signal))
+        return np.concatenate((self.barker_symbols, signal))
     
-    def remove_barker_code(self, signal: np.ndarray, start_index: int) -> np.ndarray:
+    def remove_barker_symbols(self, signal: np.ndarray, start_index: int) -> np.ndarray:
         """Remove Barker code from the signal starting at the specified index."""
-        if start_index < 0 or start_index + len(self.barker_code) > len(signal):
+        if start_index < 0 or start_index + len(self.barker_symbols) > len(signal):
             logging.warning("Invalid start index for removing Barker code.")
             return signal
-        return signal[start_index + len(self.barker_code):]
+        return signal[start_index + len(self.barker_symbols):]
     
 if __name__ == "__main__":
 
@@ -54,11 +54,11 @@ if __name__ == "__main__":
     
     # insert Barker code at a random position in the noise
     # SNR of around 1 dB for the Barker code
-    barker_code = 10**(-89/20) * BARKER_SYMBOLS[int(config['barker_sequence']['code_length'])]   
+    barker_symbols = 10**(-89/20) * BARKER_SYMBOLS[int(config['barker_sequence']['code_length'])]   
 
     insert_position = 500
     test_signal = noise.copy()
-    test_signal[insert_position:insert_position+len(barker_code)] += barker_code
+    test_signal[insert_position:insert_position+len(barker_symbols)] += barker_symbols
     detected_index = detector.detect(test_signal)
     if detected_index is not None:
         print(f"Barker code detected at index: {detected_index}")
