@@ -330,6 +330,7 @@ class StaticSDRPlotter:
                         samples_per_symbol: int,
                         title: str = "Eye Diagram",
                         num_traces: int = 100,
+                        symbols_per_trace: int = 2,
                         figsize: Tuple[int, int] = (10, 6)) -> Optional[Figure]:
         """
         Plot eye diagram for symbol timing analysis.
@@ -353,13 +354,13 @@ class StaticSDRPlotter:
             if np.iscomplexobj(samples):
                 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize)
                 self._plot_eye_single(samples.real, samples_per_symbol, ax1, 
-                                     num_traces, "Eye Diagram - I")
+                                     num_traces, symbols_per_trace, "Eye Diagram - I")
                 self._plot_eye_single(samples.imag, samples_per_symbol, ax2, 
-                                     num_traces, "Eye Diagram - Q")
+                                     num_traces, symbols_per_trace, "Eye Diagram - Q")
             else:
                 fig, ax = plt.subplots(figsize=figsize)
                 self._plot_eye_single(samples, samples_per_symbol, ax, 
-                                     num_traces, title)
+                                     num_traces, symbols_per_trace, title)
             
             plt.tight_layout()
             return fig
@@ -367,25 +368,31 @@ class StaticSDRPlotter:
             print(f"Error in plot_eye_diagram: {e}")
             return None
     
-    def _plot_eye_single(self, samples, samples_per_symbol, ax, num_traces, title):
+    def _plot_eye_single(self, samples, samples_per_symbol, ax, num_traces, symbols_per_trace, title):
         """Helper function to plot single eye diagram."""
         # Reshape into symbol periods
-        num_symbols = len(samples) // samples_per_symbol
-        num_traces = min(num_traces, np.abs(num_symbols - 2))
+
+        trace_length = symbols_per_trace * samples_per_symbol
+        max_possible_traces = (len(samples) - trace_length) // samples_per_symbol
+
+        if max_possible_traces <= 0:
+            ax.set_title(f"{title} - Not enough samples for eye diagram", fontsize=12)
+            return
         
-        time = np.arange(2 * samples_per_symbol) / samples_per_symbol
+
+        num_symbols = min(max_possible_traces, num_traces)
+        
+        time = np.linspace(-symbols_per_trace/2, symbols_per_trace/2, trace_length, endpoint=True)  # Symbol periods on x-axis
         
         for i in range(num_traces):
             start = i * samples_per_symbol
-            end = start + 2 * samples_per_symbol
-            if end <= len(samples):
-                ax.plot(time, samples[start:end], color='orange', alpha=0.5, linewidth=0.5)
+            end = start + trace_length
+            ax.plot(time, samples[start:end], color='orange', alpha=0.5, linewidth=0.5)
         
         ax.set_xlabel('Symbol Period', fontsize=10)
         ax.set_ylabel('Amplitude', fontsize=10)
         ax.set_title(title, fontsize=12)
         ax.grid(True, alpha=0.3)
-        ax.set_xlim([0, 2])
     
     def plot_magnitude_phase(self,
                            samples: np.ndarray,

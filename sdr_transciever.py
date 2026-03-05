@@ -46,7 +46,7 @@ class SDRTransciever:
             self.sdr.rx_lo = int(float(self.config['receiver']['rx_carrier']))
             self.sdr.rx_buffer_size = int(self.config['receiver']['buffer_size'])
             self.sdr.gain_control_mode_chan0 = self.config['receiver']['gain_mode']
-            if self.config['receiver']['gain_mode'] == 'manual':
+            if self.config['receiver']['gain_mode'].strip().lower() == 'manual':
                 self.sdr.rx_hardwaregain_chan0 = float(self.config['receiver']['rx_gain_dB'])
                 logging.info(f"RX Gain\t\t: {self.sdr.rx_hardwaregain_chan0} dB (manual mode)")
             else:

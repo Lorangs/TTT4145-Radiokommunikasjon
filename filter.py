@@ -8,7 +8,7 @@ write the filter coefficients to a file for hardware implementation on an SDR.
 
 import logging 
 import numpy as np
-
+from scipy import signal
 
 class RRCFilter:
     """Class to generate and manage Root Raised Cosine (RRC) filters."""
@@ -30,7 +30,7 @@ class RRCFilter:
 
 
         self.scale_factor = int(config['filter']['rrc_filter_scale_factor'])
-        self.coefficients = self.coefficients * self.scale_factor  # Scale filter coefficients to desired range
+        #self.coefficients = self.coefficients * self.scale_factor  # Scale filter coefficients to desired range
         
         self.rc_coefficients = np.convolve(self.coefficients, self.coefficients, mode='same')  # Combined transmit and receive filter response
     
@@ -80,9 +80,9 @@ class RRCFilter:
         h = h / np.sqrt(np.sum(h**2))  # Normalize filter coefficients to unit energy
         return time_vector, h
 
-    def apply_filter(self, signal: np.ndarray) -> np.ndarray:
+    def apply_filter(self, received_signal: np.ndarray) -> np.ndarray:
         """Apply RRC filter to the input signal."""
-        return np.convolve(signal, self.coefficients, mode='same')
+        return signal.convolve(received_signal, self.coefficients, mode='same', method='fft')
 
     def write_filter_to_file(self, filename: str = "rrc_filter.ftr"):
         """Write RRC filter coefficients to a file for hardware implementation. The file format is expected to be:
