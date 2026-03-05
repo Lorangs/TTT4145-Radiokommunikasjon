@@ -6,17 +6,17 @@ radio:
 
 transmitter:
   tx_cyclic_buffer: True             # Enable/disable cyclic buffer
-  tx_gain_dB: -40                   # range: -90 to 0 dB
+  tx_gain_dB: 0                   # range: -90 to 0 dB
   tx_bandwidth: 1e6                 # TX bandwidth [Hz]
-  tx_carrier: 866.5e6                 # TX local oscillator (carrier frequenzy)
+  tx_carrier: 866.51e6                 # TX local oscillator (carrier frequenzy)
   tx_buffer_size: 1024                # 2**10 samples 
 
 receiver: 
   rx_gain_dB: 0                    # range: 0 to 73 dB
   rx_bandwidth: 1e6                 # RX bandwidth [Hz]
-  rx_carrier: 866.6e6                 # RX local oscillator (carrier frequenzy)
+  rx_carrier: 866.5e6                 # RX local oscillator (carrier frequenzy)
   gain_mode: 'manual'                 # "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
-  buffer_size: 32768                  # 2**15 samples      
+  buffer_size: 2048                  # 2**15 samples      
 
 modulation:
   type: "qpsk"                        # Modulation type: "BPSK", "QPSK", More to come

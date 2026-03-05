@@ -100,11 +100,18 @@ class Synchronizer:
     def time_synchronization(self, samples: np.ndarray) -> int:
         """ ML timing synchronization algorithm. Searches for the known pattern in the received signal and estimates the timing offset."""
 
-        correlation = signal.correlate(samples, self.preamble_sequence, mode='valid', method='fft')
+        correlation = signal.correlate(samples, self.preamble_sequence, mode='same', method='fft')
 
         abs_correlation = np.abs(correlation)  # Normalize correlation to get a value between 0 and 1
 
         max_value = np.max(abs_correlation)
+
+        plt.figure(figsize=(10, 4))
+        plt.stem(abs_correlation)
+        plt.title("Correlation with Barker Code Preamble")
+        plt.xlabel("Sample Index")
+        plt.ylabel("Absolute Correlation")
+        plt.grid()
 
         if max_value > self.correlation_threshold * self.noise_floor:
             return np.argmax(abs_correlation)

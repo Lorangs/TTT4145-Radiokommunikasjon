@@ -67,20 +67,18 @@ if __name__ == "__main__":
 
     modulated_message = rrc_filter.apply_filter(upsampled_message)
     
-    upsampled_message *= 32768 # Scale to int16 range for Adalm Pluto.
+    modulated_message *= 2**15 # Scale to int16 range for Adalm Pluto.
 
-    sdr.sdr.tx(upsampled_message)
+    sdr.sdr.tx(modulated_message)
 
     for i in range(10):
         sdr.sdr.rx()    # Flush the RX buffer to ensure we get the most recent transmission
 
     received_signal = sdr.sdr.rx()
 
-    received_signal -= np.mean(received_signal)  # Remove DC offset
-
     plotter.plot_psd(
         received_signal, 
-        title="Received Signal PSD", 
+        title="Received Signal PSD",
         center_freq=0, 
         sample_rate=int(float(config['modulation']['sample_rate']))
     )
@@ -88,10 +86,9 @@ if __name__ == "__main__":
     received_fft = np.fft.fftshift(np.fft.fft(received_signal, n = len(received_signal))) / len(received_signal)
     received_mag = np.abs(received_fft)**2
     received_signal_strength_dB = 10 * np.log10(np.max(received_mag))
+    print(f"Received signal strength: {received_signal_strength_dB:.2f} dB")
 
     plotter.plot_constellation(received_signal, title="Received Signal Constellation")
- 
-    print(f"Received signal strength: {received_signal_strength_dB:.2f} dB")
 
     coarse_freq_adjusted = synchronizer.coarse_frequenzy_synchronization(received_signal)
  
@@ -104,12 +101,12 @@ if __name__ == "__main__":
         sample_rate=int(float(config['modulation']['sample_rate']))
     
     )
+    plotter.plot_time_domain(filtered_signal, title="Time Domain of Filtered Signal", sample_rate=int(float(config['modulation']['sample_rate'])), max_samples=32678)
     plotter.plot_constellation(filtered_signal, title="Constellation of Filtered Signal")
     plotter.plot_eye_diagram(filtered_signal, title="Eye Diagram of Downsampled Signal", samples_per_symbol=sps, num_traces=100, symbols_per_trace=2)
 
     delay = synchronizer.time_synchronization(filtered_signal)
 
-    plotter.plot_time_domain(filtered_signal, title="Time Domain of Filtered Signal", sample_rate=int(float(config['modulation']['sample_rate'])), max_samples=32678)
 
     if delay is None:
         print("Failed to detect Barker code. Exiting.")
