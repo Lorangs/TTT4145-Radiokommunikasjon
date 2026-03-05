@@ -120,7 +120,7 @@ class SDRChatApp:
     def start(self):
         """Start the SDR Chat Application."""
         if self.sdr.connect():  
-            self.barker_detector.set_noise_floor_dB(self.sdr.measure_noise_floor_dB())
+            self.synchronizer.read_noise_floor(self.sdr.measure_noise_floor_dB())
         else:
             logging.debug("Failed to connect to SDR.")
             return False
@@ -262,7 +262,7 @@ class SDRChatApp:
                 time_adjusted = self.synchronizer.time_synchronization(filtered_signal)
                 fine_freq_adjusted = self.synchronizer.fine_frequenzy_synchronization(time_adjusted)
 
-                barker_index = self.barker_detector.detect(fine_freq_adjusted)
+                barker_index = self.synchronizer.barker_code_detection(fine_freq_adjusted)
 
                 # === Send data to plotter if debug mode is enabled ===
                 if self.debug_mode and self.plotter is not None:
@@ -320,24 +320,6 @@ class SDRChatApp:
 
                 if self.debug_mode:
                     logging.debug(f"TX loop got datagram from queue: {datagram}")
-
-                    #self.request_static_plot({
-                    #    'type': 'time_domain',
-                    #    'data': filtered_signal.copy(),
-                    #    'title': f"Transmitted Signal"})
-                    
-                    #self.request_static_plot({
-                    #    'type': 'constellation',
-                    #    'data': filtered_signal.copy(),
-                    #    'title': f"Transmitted Constellation"})
-                    #
-                    #self.request_static_plot({
-                    #    'type': 'psd',
-                    #    'data': filtered_signal.copy(),
-                    #    'title': f"Transmitted Signal PSD",
-                    #    'sample_rate': self.config['modulation']['sample_rate'],
-                    #    'center_freq': self.config['plotter']['center_freq']
-                    #})
 
                 self.sdr.send_signal(filtered_signal)
 
