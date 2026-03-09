@@ -6,32 +6,81 @@ from barker_code import BARKER_SYMBOLS
 from matplotlib import pyplot as plt
 from filter import RRCFilter
 
+@njit(cache=True, fastmath=True)
+def interp_linear(x, i) -> np.complex64:
+    i0 = int(np.floor(i))
+    frac = i - i0
+    return x[i0]*(1-frac) + x[i0+1]*frac
+
+
+@njit(cache=True, fastmath=True)
+def _gardner_njit(samples: np.ndarray, sps: int, Kp: float, Ki: float) -> tuple[np.ndarray, np.ndarray]:
+    mu = 0.0
+    omega = sps
+    i = sps
+    out = []
+    errors = []
+
+    while i < len(samples) - sps:
+        mid = interp_linear(samples, i + mu)
+        early = interp_linear(samples, i + mu - sps//2)
+        late = interp_linear(samples, i + mu + sps//2)
+
+        error = np.real((late - early) * np.conj(mid))
+
+        omega += Ki * error
+        mu += omega + Kp * error
+
+        step = int(np.floor(mu))
+        mu -= step
+        i += step
+
+        out.append(mid)
+        errors.append(error)
+    return np.array(out, dtype=np.complex64), np.array(errors, dtype=np.float32)
+
+
+
+
 
 @njit(cache=True, fastmath=True)
 def _costas_loop_njit(received_signal: np.ndarray,
-                      alpha: float,
-                      beta:float,
+                      Kp: float,
+                      Ki:float,
                       modulation_order: int) -> np.ndarray:
     """Costas loop implementation optimized with Numba's JIT compilation for performance."""
-    phase = 0.0     # [radians] 
-    freq = 0.0      # [radians/sample] 
+    loop_integral = 0.0
+    vco_phase = 0.0     # [radians] 
     out = np.zeros_like(received_signal, dtype=np.complex64)
 
     N = len(received_signal)
     for i in range(N):
-        out[i] = received_signal[i] * np.exp(-1j * phase)
-        sample = out[i]
+        sample = received_signal[i] * np.exp(-1j * vco_phase)  # Mix down the signal by the current phase estimate
 
-        if modulation_order == 2.0:   # BPSK
-            error = np.sign(sample.real) * sample.imag
-        else:                       # QPSK
-            error = np.sign(sample.real) * sample.imag - np.sign(sample.imag) * sample.real
+        I = np.real(sample)
+        Q = np.imag(sample)
 
-        freq += beta * error
-        phase += freq + alpha * error
+        # decision-directed error signal based on the modulation scheme
+        if modulation_order == 2:  # BPSK
+            error = np.sign(I) * Q  # For BPSK, the error can be computed as the product of I and Q
 
-        # Keep phase in the range [0, 2*pi) to prevent numerical issues
-        phase = phase % (2 * np.pi)
+            # loop filter: update frequency and phase estimates
+            loop_integral += Ki * error  # Integrate the error to update frequency estimate
+            vco_phase = Kp * error + loop_integral  # Update phase estimate based on proportional and integral
+
+            # store the real part of the corrected sample for output (since BPSK only has information in the I component)
+            out[i] = I
+
+        else:  # QPSK
+            error = np.sign(I) * Q - np.sign(Q) * I  # For QPSK.    
+
+            # loop filter: update frequency and phase estimates
+            loop_integral += Ki * error  # Integrate the error to update frequency estimate
+            vco_phase = Kp * error + loop_integral  # Update phase estimate based on proportional and integral
+
+            # store the corrected sample for output
+            out[i] = sample
+
     return out
 
 
@@ -47,8 +96,21 @@ class Synchronizer:
         self.correlation_threshold = float(config['barker_sequence']['correlation_threshold'])
         self.noise_floor = 0.0 # linear scale, to be set after SDR connection
         
-        self.costas_alpha = float(config['synchronization']['costas_alpha'])
-        self.costas_beta = float(config['synchronization']['costas_beta'])  
+        # Calculate Costas loop parameters.
+        loop_bw = float(config['synchronization']['costas_alpha']) * float(config['synchronization']['signal_bw']) / float(config['modulation']['sample_rate'])  # normalized loop bandwidth (as a fraction of the sample rate)
+        zeta = float(config['synchronization']['costas_zeta'])
+        wn = (4 * zeta * loop_bw) / (zeta + 1/(4*zeta))  # Natural frequency of the loop
+        K0 = float(config['synchronization']['costas_K0'])
+
+        #self.costas_Kp = (2 * zeta * wn) /  K0
+        #self.costas_Ki = wn**2 / K0
+
+        self.costas_Kp = 0.132
+        self.costas_Ki = 0.00932
+        self.gardner_Kp = 0.05
+        self.gardner_Ki = 0.0001
+
+        print(f"Costas loop parameters: Kp={self.costas_Kp:.6f}, Ki={self.costas_Ki:.6f}")
         
         filter = RRCFilter(config)
         rc_filter = filter.rc_coefficients
@@ -56,7 +118,7 @@ class Synchronizer:
         preamble_sequence = BARKER_SYMBOLS[self.modulation_scheme][int(config['barker_sequence']['code_length'])]  
         preamble_sequence_upsampled = np.zeros(len(preamble_sequence) * self.sps, dtype=np.complex64)
         preamble_sequence_upsampled[::self.sps] = preamble_sequence  
-        preamble_sequence = np.convolve(preamble_sequence_upsampled, rc_filter, mode='full')  # Apply pulse shaping to the preamble sequence
+        preamble_sequence = signal.convolve(preamble_sequence_upsampled, rc_filter, mode='same', method='fft')  # Apply pulse shaping to the preamble sequence
 
         preamble_energy = np.sum(np.abs(preamble_sequence)**2)
         self.preamble_sequence = preamble_sequence / np.sqrt(preamble_energy)  
@@ -69,7 +131,8 @@ class Synchronizer:
             raise ValueError(f"Unsupported modulation scheme: {self.modulation_scheme}")
         
         # compile the Numba-optimized functions with the specified parameters
-        _costas_loop_njit(np.zeros(self.buffer_size, dtype=np.complex64), self.costas_alpha, self.costas_beta, self.modulation_order)
+        _costas_loop_njit(np.zeros(self.buffer_size, dtype=np.complex64), self.costas_Kp, self.costas_Ki, self.modulation_order)
+        _gardner_njit(np.zeros(self.buffer_size, dtype=np.complex64), self.sps, self.gardner_Kp, self.gardner_Ki)
 
     def set_noise_floor(self, noise_floor_dB: float):
         """Set the noise floor in dB for adaptive thresholding."""
@@ -87,6 +150,10 @@ class Synchronizer:
 
         estimated_frequenzy_offset = freqs[np.argmax(magnitude)] / self.modulation_order # Divide by modulation order to get the actual frequency offset
         
+        #signal_power_dB = 10 * np.log10(np.max(magnitude)**2)
+        #if signal_power_dB < self.noise_floor + self.signal_power_threshold_dB:
+        #    return None
+
         time_vector = np.arange(len(received_signal)) / self.sample_rate
         print(f"Estimated frequency offset: {estimated_frequenzy_offset:.2f} Hz")
         return received_signal * np.exp(-1j * 2 * np.pi * estimated_frequenzy_offset * time_vector)
@@ -94,13 +161,17 @@ class Synchronizer:
     
     def fine_frequenzy_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
         """Fine frequency synchronization using a costas loop."""
-        return _costas_loop_njit(received_signal, self.costas_alpha, self.costas_beta, self.modulation_order)
+        return _costas_loop_njit(received_signal, self.costas_Kp, self.costas_Ki, self.modulation_order)
 
+
+    def gardner_timing_synchronization(self, samples: np.ndarray) -> np.ndarray:
+        return _gardner_njit(samples, self.sps, self.gardner_Kp, self.gardner_Ki)[0]
+    
 
     def time_synchronization(self, samples: np.ndarray) -> int:
         """ ML timing synchronization algorithm. Searches for the known pattern in the received signal and estimates the timing offset."""
 
-        correlation = signal.correlate(samples, self.preamble_sequence, mode='same', method='fft')
+        correlation = signal.convolve(samples, self.preamble_sequence, mode='full', method='fft')
 
         abs_correlation = np.abs(correlation)  # Normalize correlation to get a value between 0 and 1
 
@@ -113,17 +184,13 @@ class Synchronizer:
         plt.ylabel("Absolute Correlation")
         plt.grid()
 
-        if max_value > self.correlation_threshold * self.noise_floor:
-            return np.argmax(abs_correlation)
-        
-        else: return None
-        
+        return np.argmax(abs_correlation)  # Return the index of the maximum correlation as the estimated timing offset
 
 
 if __name__ == "__main__":
     from yaml import safe_load
     from sdr_plots import StaticSDRPlotter
-    
+    from matplotlib.pyplot import show
 
     try:
         with open("setup/config.yaml", 'r') as f:
@@ -134,76 +201,49 @@ if __name__ == "__main__":
 
     synchronizer = Synchronizer(config)
     plotter = StaticSDRPlotter()
-    rrc_filter = RRCFilter(config).coefficients
+    filter = RRCFilter(config)
 
     ##########################################
     # Test signal Parameters
     ##########################################
-    num_symbols = 500
-    frequency_offset = 100  # [Hz]
-    timing_offset = -0.5 # [fraction of symbol period]
-    snr_dB = 10 # [dB]
+    num_symbols = 1000  # Number of symbols in the test signal (excluding preamble)
+    frequency_offset = 1000  # [Hz]
+    timing_offset = 10.4 # [fraction of symbol period]
+    snr_dB = 30 # [dB]
 
-    sps = synchronizer.sps
-    sample_rate = synchronizer.sample_rate
+    # Generate QPSK test signal
+    test_symbols = np.random.randint(0, 4, num_symbols)  # Random QPSK symbols
+    symbol_mapping = {0: 1+1j, 1: -1+1j, 2: -1-1j, 3: 1-1j}  # Gray coding for QPSK
+    modulated_signal = np.array([symbol_mapping[symbol] for symbol in test_symbols], dtype=np.complex64)
+    upsampled_signal = np.zeros(len(modulated_signal) * synchronizer.sps, dtype=np.complex64)
+    upsampled_signal[::synchronizer.sps] = modulated_signal  # Upsample by inserting zeros between symbols
+    shaped_signal = filter.apply_filter(upsampled_signal)  # Apply pulse shaping
 
-    test_signal = np.zeros(num_symbols, dtype=np.complex64)
-    test_signal = (2*np.random.randint(0, 2, num_symbols) - 1) + 1j*(2*np.random.randint(0, 2, num_symbols) - 1)
-    test_signal = np.concatenate([BARKER_SYMBOLS[synchronizer.modulation_scheme][13], test_signal])
+    # Add frequency offset
+    time_vector = np.arange(len(shaped_signal)) / synchronizer.sample_rate
+    frequency_offset_signal = shaped_signal * np.exp(1j * 2 * np.pi * frequency_offset * time_vector)
 
-    test_signal_upsampled = np.zeros(len(test_signal) * sps, dtype=np.complex64)
-    test_signal_upsampled[::sps] = test_signal  # Upsample by inserting zeros between symbols
-    time_vector = np.arange(len(test_signal_upsampled)) / sample_rate
+    # Add noise
+    signal_power = np.mean(np.abs(frequency_offset_signal)**2)
+    noise_power = signal_power / (10**(snr_dB/10))
+    noise = np.sqrt(noise_power/2) * (np.random.randn(len(frequency_offset_signal)) + 1j * np.random.randn(len(frequency_offset_signal)))
+    received_signal = frequency_offset_signal + noise
 
-    # TX processing: pulse shaping, add frequency and timing offset
-    test_signal = signal.convolve(test_signal_upsampled, rrc_filter, mode='same', method='fft') #  Apply pulse shapin
-    
-    test_signal = test_signal * np.exp(1j * 2*np.pi * frequency_offset * time_vector)  # Add frequency offset
-    test_signal = np.roll(test_signal, int(timing_offset * sps))  # Add timing offset
+    coarse_corrected_signal = synchronizer.coarse_frequenzy_synchronization(received_signal)
 
-    test_signal += 10**(-snr_dB/10) * (np.random.randn(len(test_signal)) + 1j*np.random.randn(len(test_signal)))  # Add AWGN noise
-    #test_signal += 0.5 + 1j*0.2 # add DC offset
-    awgn_signal = test_signal.copy()
+    filtered_signal = filter.apply_filter(coarse_corrected_signal)
 
-    # RX processing: coarse frequency synchronization, matched filtering, fine frequency synchronization, timing synchronization
+    time_adjusted_signal = synchronizer.gardner_timing_synchronization(filtered_signal)
 
-    test_signal = synchronizer.coarse_frequenzy_synchronization(test_signal)  
-    coarse_freq_corrected_signal = test_signal.copy()
+    fine_corrected_signal = synchronizer.fine_frequenzy_synchronization(time_adjusted_signal)
 
-    test_signal = signal.convolve(test_signal, rrc_filter, mode='same', method='fft')  # Matched filtering after coarse frequency synchronization   
 
-    plotter.plot_eye_diagram(
-        test_signal,
-        samples_per_symbol=sps,
-        title="Eye Diagram after Coarse Frequency Synchronization and Matched Filtering",
-        num_traces=100,
-        symbols_per_trace=2
-    )
+    print(f"len symbols: {len(modulated_signal)} symbols")
+    print(f"len upsampled signal: {len(upsampled_signal)} samples")
+    print(f"len time synchronized signal: {len(time_adjusted_signal)} samples")
 
-    delay = synchronizer.time_synchronization(test_signal) # Timing synchronization without preamble
-    print(f"Estimated timing offset (samples): {delay}")
-    test_signal = test_signal[delay::sps]  # Compensate for timing offset
-
-    downsampled_signal = test_signal.copy()
-
-    test_signal = synchronizer.fine_frequenzy_synchronization(test_signal)  # Fine frequency synchronization using Costas loop
-    fine_freq_corrected_signal = test_signal.copy()
-
-    plotter.plot_constellation(
-        awgn_signal, 
-        title="Received Signal Constellation with AWGN"
-    )
-
-    plotter.plot_constellation(
-        coarse_freq_corrected_signal, 
-        title="After Coarse Frequency Synchronization"
-    )
-    plotter.plot_constellation(
-        downsampled_signal, 
-        title="After Timing Synchronization (Downsampled)"
-    )
-    plotter.plot_constellation(
-        fine_freq_corrected_signal, 
-        title="After Fine Frequency Synchronization (Costas Loop)"
-    )
-    plt.show()
+    plotter.plot_constellation(received_signal, title="Constellation Before Synchronization")
+    plotter.plot_constellation(coarse_corrected_signal, title="Constellation After Coarse Frequency Synchronization")
+    plotter.plot_constellation(time_adjusted_signal, title="Constellation After Timing Synchronization")
+    plotter.plot_constellation(fine_corrected_signal, title="Constellation After Synchronization")
+    show()

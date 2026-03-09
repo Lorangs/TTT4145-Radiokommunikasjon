@@ -32,7 +32,7 @@ class RRCFilter:
         self.scale_factor = int(config['filter']['rrc_filter_scale_factor'])
         #self.coefficients = self.coefficients * self.scale_factor  # Scale filter coefficients to desired range
         
-        self.rc_coefficients = np.convolve(self.coefficients, self.coefficients, mode='same')  # Combined transmit and receive filter response
+        self.rc_coefficients = signal.convolve(self.coefficients, self.coefficients, mode='full')  # Combined transmit and receive filter response
     
         if self.hardware_filter_enable:
             self.tx_bandwidth = int(float(config['transmitter']['tx_bandwidth']))
@@ -82,7 +82,7 @@ class RRCFilter:
 
     def apply_filter(self, received_signal: np.ndarray) -> np.ndarray:
         """Apply RRC filter to the input signal."""
-        return signal.convolve(received_signal, self.coefficients, mode='same', method='fft')
+        return signal.convolve(received_signal, self.coefficients, mode='same', method='direct')
 
     def write_filter_to_file(self, filename: str = "rrc_filter.ftr"):
         """Write RRC filter coefficients to a file for hardware implementation. The file format is expected to be:
