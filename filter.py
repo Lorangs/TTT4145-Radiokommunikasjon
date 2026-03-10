@@ -117,6 +117,43 @@ class RRCFilter:
         
     
 
+class BWLPFilter:
+    """Optional front-end low-pass filter for complex baseband RX samples."""
+
+    def __init__(self, config: dict):
+        self.enabled = bool(config["filter"].get("butterworth_enable", False))
+        self.sample_rate = float(config["modulation"]["sample_rate"])
+        self.order = int(config["filter"].get("butterworth_order", 4))
+        self.cutoff_hz = float(config["filter"].get("butterworth_cutoff_hz", 140e3))
+
+        nyquist = 0.5 * self.sample_rate
+        if not 0 < self.cutoff_hz < nyquist:
+            raise ValueError(
+                f"butterworth_cutoff_hz must be between 0 and Nyquist ({nyquist} Hz)"
+            )
+
+        self.sos = signal.butter(
+            N=self.order,
+            Wn=self.cutoff_hz,
+            btype="lowpass",
+            fs=self.sample_rate,
+            output="sos",
+        )
+
+    def apply_filter(self, coarse_corrected_signal: np.ndarray) -> np.ndarray:
+        """Filter complex baseband RX samples after coarse frequency correction."""
+        if not self.enabled:
+            return coarse_corrected_signal
+
+        filtered = signal.sosfilt(self.sos, coarse_corrected_signal)
+        return filtered.astype(np.complex64, copy=False)
+
+
+    
+
+
+
+
 if __name__ == "__main__":
     from yaml import safe_load
     from scipy import signal

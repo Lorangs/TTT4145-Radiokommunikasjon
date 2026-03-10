@@ -25,9 +25,12 @@ modulation:
   sample_rate: 1e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
 
 coding:
-  channel_coding_scheme: "hamming"    # Channel coding scheme: "hamming", More to come
+  channel_coding_scheme: "hamming"     # Channel coding scheme: "hamming", More to come
   hamming_n: 15                        # Hamming code parameter n (total codeword length)
   hamming_k: 11                        # Hamming code parameter k (data length)
+  scrambler_enable: true                # 
+  scrambler_seed: 93                    # 
+  scrambler_register_length: 7          # 
 
 filter:
   rrc_roll_off: 0.5                   # Roll-off factor (alpha) for pulse shaping filter
@@ -35,6 +38,9 @@ filter:
   rrc_filter_scale_factor: 1          # (2**15-1) Scale factor for RRC filter coefficients to fit within int16 range for hardware filtering.
   hardware_filter_enable: False        # Enable/disable hardware RRC filtering on the SDR. If False, RRC filtering is done in software.
   hardware_filter_file: "rrc_filter_coefficients.ftr"  # File to store RRC filter coefficients for hardware filtering. Only used if rrc_filtering_enable is True.
+  butterworth_enable: false           # 
+  butterworth_order: 4                # Rolloff order 
+  butterworth_cutoff_hz: 140e3        # Cutoff Freq.
 
 barker_sequence:
   code_length: 13                     # Length of Barker code (choice: 7, 11 or 13)

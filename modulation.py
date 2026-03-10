@@ -2,24 +2,17 @@
 Message Protocol Module.
 Defines message structure, creation, parsing, modulation, and demodulation.
 
-Includes Barker code preamble handling and CRC16 checksum verification.
-
-Message Structure:
-    [Barker Code (N bits)] [Message Type (1 byte)] [Payload (M bytes)] [Checksum CRC16 (2 bytes)]
+Includes CRC16 verification and optional payload scrambling in the bit domain.
 
 Modulation Types Supported:
     - BPSK
     - QPSK
-
-Generated signal of modulated symbols are recieved / transmitted by SDR transciever module.
-
 """
 
 import numpy as np
+
 from datagram import msgType, Datagram
-from scipy import signal
-from barker_code import BARKER_BITS, BARKER_SYMBOLS
-import logging
+from scrambler import LFSRScrambler
 
 
 class ModulationProtocol:
@@ -27,6 +20,12 @@ class ModulationProtocol:
         """Initialize Message Protocol with given configuration."""
         self.modulation_type = str(config['modulation']['type']).upper().strip()
         self.sps = int(config['modulation']['samples_per_symbol'])
+        coding_cfg = config.get("coding", {})
+        self.scrambler_enable = bool(coding_cfg.get("scrambler_enable", False))
+        self.scrambler = LFSRScrambler(
+            seed=int(coding_cfg.get("scrambler_seed", 0x5D)),
+            register_length=int(coding_cfg.get("scrambler_register_length", 7)),
+        )
 
 
     # ================= Upsampling and Downsampling =================
@@ -39,6 +38,40 @@ class ModulationProtocol:
     def downsample_symbols(self, symbols: np.array, delay: int) -> np.array:
         """Downsample symbols by taking every N-th sample."""
         return symbols[delay::self.sps]
+
+    def scramble_bits(self, bits: np.ndarray) -> np.ndarray:
+        if not self.scrambler_enable:
+            return bits.astype(np.uint8, copy=True)
+        return self.scrambler.apply(bits)
+
+    def descramble_bits(self, bits: np.ndarray) -> np.ndarray:
+        if not self.scrambler_enable:
+            return bits.astype(np.uint8, copy=True)
+        return self.scrambler.apply(bits)
+
+    def pack_message_bits(self, message: Datagram) -> np.ndarray:
+        message_bytes = message.pack()
+        bits = np.unpackbits(np.frombuffer(message_bytes, dtype=np.uint8))
+        return self.scramble_bits(bits)
+
+    def unpack_message_bits(self, bits: np.ndarray) -> Datagram:
+        descrambled_bits = self.descramble_bits(bits)
+        byte_array = np.packbits(descrambled_bits)
+        return Datagram.unpack(byte_array.tobytes())
+
+    def decision_bits_from_symbols(self, symbols: np.ndarray) -> np.ndarray:
+        if self.modulation_type == "BPSK":
+            return (symbols > 0).astype(np.uint8)
+
+        if self.modulation_type == "QPSK":
+            i_bits = (symbols.real < 0).astype(np.uint8)
+            q_bits = (symbols.imag < 0).astype(np.uint8)
+            bits = np.empty(i_bits.size + q_bits.size, dtype=np.uint8)
+            bits[0::2] = i_bits
+            bits[1::2] = q_bits
+            return bits
+
+        raise NotImplementedError(f"Demodulation type {self.modulation_type} not implemented.")
     
     
     # ================= Modulation and Demodulation =================
@@ -65,32 +98,20 @@ class ModulationProtocol:
         
     def _bpsk_modulate(self, message: Datagram) -> np.ndarray:
         """BPSK modulation of the message bytes."""
-
-        # Convert Datagram to bytes and then to bits
-        message_bytes = message.pack()
-        bits = np.unpackbits(np.frombuffer(message_bytes, dtype=np.uint8))
+        bits = self.pack_message_bits(message)
 
         # Map bits to BPSK symbols: 0 -> 1, 1 -> -1
         return (2 * bits - 1).astype(np.int8)
     
     def _bpsk_demodulate(self, symbols: np.ndarray) -> Datagram:
         """BPSK demodulation of the symbols to message bytes."""
-
-        # Decision: symbols 
-        bits = (symbols > 0).astype(np.int8)  # symbol < 0 -> 1, else 0
-
-        # Pack bits into bytes
-        byte_array = np.packbits(bits)
-
-        return Datagram.unpack(byte_array.tobytes())
+        bits = self.decision_bits_from_symbols(symbols)
+        return self.unpack_message_bits(bits)
     
 
     def _qpsk_modulate(self, message: Datagram) -> np.ndarray:
         """QPSK modulation of the message bytes."""
-
-        # Convert Datagram to bytes and then to bits
-        message_bytes = message.pack()
-        bits = np.unpackbits(np.frombuffer(message_bytes, dtype=np.uint8))
+        bits = self.pack_message_bits(message)
 
         # Reshape into pairs of bits
         bit_pairs = bits.reshape(-1, 2)
@@ -102,19 +123,8 @@ class ModulationProtocol:
     
     def _qpsk_demodulate(self, symbols: np.ndarray) -> Datagram:
         """QPSK demodulation of the symbols to message bytes."""
-
-        # Decision boundaries for I and Q
-        I_bits = (symbols.real < 0 ).astype(np.int8)  # I < 0 -> 1, else 0
-        Q_bits = (symbols.imag < 0 ).astype(np.int8)  # Q < 0 -> 1, else 0
-
-        # Interleave bits back into original order
-        bits = np.empty(I_bits.size + Q_bits.size, dtype=np.int8)
-        bits[0::2] = I_bits
-        bits[1::2] = Q_bits
-
-        # Pack bits into bytes
-        byte_array = np.packbits(bits)
-        return Datagram.unpack(byte_array.tobytes())
+        bits = self.decision_bits_from_symbols(symbols)
+        return self.unpack_message_bits(bits)
     
 
 
@@ -149,5 +159,4 @@ if __name__ == "__main__":
 
     plotter.plot_constellation(modulated_symbols, title="Received Symbols with Noise")
     show()
-
 

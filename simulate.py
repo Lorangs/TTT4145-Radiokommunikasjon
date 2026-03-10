@@ -1,5 +1,5 @@
 """
-Standalone simulation harness for testing module coherence without SDR hardware.
+Simulation harness for exercising the current SDR modules without hardware.
 
 Examples:
     python simulate.py
@@ -18,29 +18,17 @@ import numpy as np
 from yaml import safe_load
 
 from barker_detection import BarkerDetector
+from correlation import analyze_signal, build_reference_signal
 from datagram import Datagram, msgType
 from filter import RRCFilter
 from modulation import ModulationProtocol
-from correlation import analyze_signal, build_reference_signal
+from synchronize import Synchronizer
 
 
 @dataclass
 class SimulationCase:
     name: str
     noise_std: float
-
-
-def patch_datagram_pack() -> None:
-    def _patched_pack(self: Datagram) -> bytes:
-        return (
-            int(self._msg_id).to_bytes(2, byteorder="big")
-            + bytes([self._msg_type.value])
-            + bytes([self._payload_size])
-            + self._payload.tobytes()
-            + int(self._crc16).to_bytes(2, byteorder="big")
-        )
-
-    Datagram.pack = _patched_pack
 
 
 def load_config(path: str) -> dict:
@@ -153,56 +141,102 @@ def best_aligned_symbol_error_rate(
     return best_ser, best_count, best_lag
 
 
-def decode_symbols_to_bits(symbols: np.ndarray, modulation_type: str) -> np.ndarray:
-    modulation_type = modulation_type.upper().strip()
-    if modulation_type == "BPSK":
-        return (symbols.real > 0).astype(np.uint8)
-    if modulation_type == "QPSK":
-        i_bits = (symbols.real < 0).astype(np.uint8)
-        q_bits = (symbols.imag < 0).astype(np.uint8)
-        bits = np.empty(symbols.size * 2, dtype=np.uint8)
-        bits[0::2] = i_bits
-        bits[1::2] = q_bits
-        return bits
-    raise ValueError(f"Unsupported modulation type: {modulation_type}")
-
-
-def compat_unpack_datagram(raw_bytes: bytes) -> Datagram:
-    min_length = 6
-    if len(raw_bytes) < min_length:
-        raise ValueError("Data length is too short to be a valid packed datagram.")
-
-    msg_id = np.uint8(raw_bytes[1])
-    msg_type = msgType(raw_bytes[2])
-    payload_size = raw_bytes[3]
-    expected_length = min_length + payload_size
-    if len(raw_bytes) != expected_length:
-        raise ValueError(
-            f"Packed datagram length mismatch: got {len(raw_bytes)}, expected {expected_length}."
-        )
-
-    payload = np.frombuffer(raw_bytes[4 : 4 + payload_size], dtype=np.uint8).copy()
-    received_crc = int.from_bytes(raw_bytes[4 + payload_size : 6 + payload_size], "big")
-    datagram = Datagram(msg_id=msg_id, msg_type=msg_type, payload=payload)
-    if int(datagram.get_crc16) != received_crc:
-        raise ValueError("CRC16 checksum does not match.")
-    return datagram
-
-
 def recover_datagram_from_symbols(
     symbols: np.ndarray,
-    reference_datagram: Datagram,
-    modulation_type: str,
+    modem: ModulationProtocol,
 ) -> Datagram:
-    bits = decode_symbols_to_bits(symbols, modulation_type)
-    reference_bit_count = len(reference_datagram.pack()) * 8
-    packed = np.packbits(bits[:reference_bit_count]).tobytes()
-    return compat_unpack_datagram(packed)
+    bits = modem.decision_bits_from_symbols(symbols)
+    return modem.unpack_message_bits(bits)
 
 
 def make_datagram(message: str) -> Datagram:
     payload = np.frombuffer(message.encode("utf-8"), dtype=np.uint8)
     return Datagram(msg_id=np.uint8(101), msg_type=msgType.DATA, payload=payload)
+
+
+def bit_balance(bits: np.ndarray) -> tuple[int, int]:
+    ones = int(np.count_nonzero(bits))
+    zeros = int(bits.size - ones)
+    return zeros, ones
+
+
+def normalized_symbol_correlation(reference: np.ndarray, received: np.ndarray) -> np.ndarray:
+    if received.size < reference.size:
+        return np.array([], dtype=np.float32)
+
+    reference = reference.astype(np.complex64, copy=False)
+    received = received.astype(np.complex64, copy=False)
+    raw = np.correlate(received, reference, mode="valid")
+    ref_energy = float(np.vdot(reference, reference).real)
+    rx_power = np.abs(received) ** 2
+    window_energy = np.convolve(rx_power, np.ones(reference.size, dtype=np.float32), mode="valid")
+    denom = np.sqrt(np.maximum(ref_energy * window_energy, 1e-12))
+    return np.abs(raw) / denom
+
+
+def detect_barker_start(
+    received_symbols: np.ndarray,
+    detector: BarkerDetector,
+    threshold: float,
+) -> tuple[int | None, float]:
+    scores = normalized_symbol_correlation(detector.barker_symbols, received_symbols)
+    if scores.size == 0:
+        return None, 0.0
+
+    peak_index = int(np.argmax(scores))
+    peak_value = float(scores[peak_index])
+    if peak_value < threshold:
+        return None, peak_value
+    return peak_index, peak_value
+
+
+def make_random_symbols(
+    rng: np.random.Generator,
+    modulation_type: str,
+    count: int,
+) -> np.ndarray:
+    modulation_type = modulation_type.upper().strip()
+    if modulation_type == "BPSK":
+        return rng.choice(np.array([-1, 1], dtype=np.int8), size=count).astype(np.complex64)
+
+    i = rng.choice(np.array([-1, 1], dtype=np.int8), size=count)
+    q = rng.choice(np.array([-1, 1], dtype=np.int8), size=count)
+    return (i + 1j * q).astype(np.complex64)
+
+
+def shape_symbol_stream(
+    symbols: np.ndarray,
+    modem: ModulationProtocol,
+    rrc_filter: RRCFilter,
+    guard_symbols: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    guard = np.zeros(guard_symbols, dtype=np.complex64)
+    framed_symbols = np.concatenate((guard, symbols.astype(np.complex64), guard))
+    upsampled = modem.upsample_symbols(framed_symbols)
+    return rrc_filter.apply_filter(upsampled).astype(np.complex64), framed_symbols
+
+
+def run_sync_pipeline(
+    tx_signal: np.ndarray,
+    synchronizer: Synchronizer,
+    rrc_filter: RRCFilter,
+    rng: np.random.Generator,
+    case: SimulationCase,
+    args: argparse.Namespace,
+) -> np.ndarray:
+    rx_signal = apply_channel(
+        tx_signal,
+        sample_rate=float(synchronizer.sample_rate),
+        rng=rng,
+        noise_std=case.noise_std,
+        freq_offset=args.freq_offset,
+        phase_offset=args.phase_offset,
+        timing_offset=args.timing_offset_samples,
+    )
+    coarse = synchronizer.coarse_frequenzy_synchronization(rx_signal)
+    matched = rrc_filter.apply_filter(coarse)
+    timed = synchronizer.gardner_timing_synchronization(matched)
+    return synchronizer.fine_frequenzy_synchronization(timed)
 
 
 def run_modem_case(
@@ -226,8 +260,10 @@ def run_modem_case(
     compat_ok = True
     compat_error = ""
     recovered_text = ""
+    scrambled_bits = modem.pack_message_bits(datagram)
+    zeros, ones = bit_balance(scrambled_bits)
     try:
-        recovered = recover_datagram_from_symbols(rx_symbols, datagram, modem.modulation_type)
+        recovered = recover_datagram_from_symbols(rx_symbols, modem)
         recovered_text = recovered.get_payload.tobytes().decode("utf-8", errors="replace")
         compat_ok = recovered_text == datagram.get_payload.tobytes().decode("utf-8", errors="replace")
     except Exception as exc:
@@ -241,6 +277,8 @@ def run_modem_case(
         "noise_std": case.noise_std,
         "symbol_error_rate": ser,
         "symbols_compared": compared,
+        "scrambled_zero_bits": zeros,
+        "scrambled_one_bits": ones,
         "native_roundtrip_ok": native_ok,
         "native_error": native_error,
         "compat_roundtrip_ok": compat_ok,
@@ -260,9 +298,11 @@ def run_barker_case(
     tx = detector.add_barker_symbols(payload_symbols)
     rx = add_awgn(tx, case.noise_std, rng)
 
-    # Disable adaptive thresholding so clean and synthetic noisy cases can be detected directly.
-    detector.set_noise_floor_dB(0.0)
-    start_index = detector.detect(rx)
+    start_index, peak = detect_barker_start(
+        nearest_constellation_symbols(rx, modem.modulation_type),
+        detector,
+        threshold=detector.correlation_scale_factor_threshold,
+    )
     remove_ok = False
     if start_index is not None:
         recovered = detector.remove_barker_symbols(rx, start_index)
@@ -276,6 +316,7 @@ def run_barker_case(
         "noise_std": case.noise_std,
         "detected": start_index is not None,
         "detected_index": start_index,
+        "peak": peak,
         "remove_ok": remove_ok,
         "sequence_length": int(len(detector.barker_symbols)),
     }
@@ -285,44 +326,24 @@ def run_sync_case(
     case: SimulationCase,
     modem: ModulationProtocol,
     rrc_filter: RRCFilter,
-    synchronizer,
+    synchronizer: Synchronizer,
     rng: np.random.Generator,
     args: argparse.Namespace,
 ) -> dict:
-    symbol_count = args.symbol_count
-    modulation = modem.modulation_type.upper().strip()
-    if modulation == "BPSK":
-        source_symbols = rng.choice(np.array([-1, 1], dtype=np.int8), size=symbol_count).astype(np.complex64)
-    else:
-        i = rng.choice(np.array([-1, 1], dtype=np.int8), size=symbol_count)
-        q = rng.choice(np.array([-1, 1], dtype=np.int8), size=symbol_count)
-        source_symbols = (i + 1j * q).astype(np.complex64)
-
-    upsampled = modem.upsample_symbols(source_symbols)
-    tx_signal = rrc_filter.apply_filter(upsampled)
-
-    rx_signal = apply_channel(
-        tx_signal,
-        sample_rate=float(synchronizer.sample_rate),
-        rng=rng,
-        noise_std=case.noise_std,
-        freq_offset=args.freq_offset,
-        phase_offset=args.phase_offset,
-        timing_offset=args.timing_offset_samples,
-    )
-
-    coarse = synchronizer.coarse_frequenzy_synchronization(rx_signal)
-    matched = rrc_filter.apply_filter(coarse)
-    timed = synchronizer.time_synchronization(matched)
-    fine = synchronizer.fine_frequenzy_synchronization(timed)
-
-    transient = max(2, rrc_filter.filter_span // 2)
-    usable_rx = fine[transient:]
-    ser, compared, lag = best_aligned_symbol_error_rate(
-        usable_rx,
+    source_symbols = make_random_symbols(rng, modem.modulation_type, args.symbol_count)
+    tx_signal, framed_symbols = shape_symbol_stream(
         source_symbols,
+        modem,
+        rrc_filter,
+        guard_symbols=args.guard_symbols,
+    )
+    synced = run_sync_pipeline(tx_signal, synchronizer, rrc_filter, rng, case, args)
+
+    ser, compared, lag = best_aligned_symbol_error_rate(
+        synced,
+        framed_symbols,
         modem.modulation_type,
-        max_lag=max(16, rrc_filter.filter_span * 2),
+        max_lag=args.sync_max_lag,
     )
 
     return {
@@ -332,7 +353,7 @@ def run_sync_case(
         "symbols_compared": compared,
         "symbol_error_rate": ser,
         "best_lag": lag,
-        "timing_output_symbols": int(fine.size),
+        "timing_output_symbols": int(synced.size),
         "pass": compared > 0 and ser <= args.sync_ser_threshold,
     }
 
@@ -343,40 +364,35 @@ def run_full_case(
     modem: ModulationProtocol,
     detector: BarkerDetector,
     rrc_filter: RRCFilter,
-    synchronizer,
+    synchronizer: Synchronizer,
     rng: np.random.Generator,
     args: argparse.Namespace,
 ) -> dict:
     tx_symbols = modem.modulate_message(datagram).astype(np.complex64)
     framed_symbols = detector.add_barker_symbols(tx_symbols)
-    upsampled = modem.upsample_symbols(framed_symbols)
-    tx_signal = rrc_filter.apply_filter(upsampled)
+    tx_signal, _ = shape_symbol_stream(
+        framed_symbols,
+        modem,
+        rrc_filter,
+        guard_symbols=args.guard_symbols,
+    )
+    synced = run_sync_pipeline(tx_signal, synchronizer, rrc_filter, rng, case, args)
+    decided = nearest_constellation_symbols(synced, modem.modulation_type)
 
-    rx_signal = apply_channel(
-        tx_signal,
-        sample_rate=float(synchronizer.sample_rate),
-        rng=rng,
-        noise_std=case.noise_std,
-        freq_offset=args.freq_offset,
-        phase_offset=args.phase_offset,
-        timing_offset=args.timing_offset_samples,
+    start_index, peak = detect_barker_start(
+        decided,
+        detector,
+        threshold=detector.correlation_scale_factor_threshold,
     )
 
-    coarse = synchronizer.coarse_frequenzy_synchronization(rx_signal)
-    matched = rrc_filter.apply_filter(coarse)
-    timed = synchronizer.time_synchronization(matched)
-    fine = synchronizer.fine_frequenzy_synchronization(timed)
-
-    detector.set_noise_floor_dB(0.0)
-    start_index = detector.detect(fine)
     recovered_text = ""
     compat_ok = False
     compat_error = ""
     if start_index is not None:
-        payload_rx = detector.remove_barker_symbols(fine, start_index)
+        payload_rx = detector.remove_barker_symbols(decided, start_index)
         payload_rx = payload_rx[: tx_symbols.size]
         try:
-            recovered = recover_datagram_from_symbols(payload_rx, datagram, modem.modulation_type)
+            recovered = recover_datagram_from_symbols(payload_rx, modem)
             recovered_text = recovered.get_payload.tobytes().decode("utf-8", errors="replace")
             compat_ok = recovered_text == datagram.get_payload.tobytes().decode("utf-8", errors="replace")
         except Exception as exc:
@@ -388,6 +404,7 @@ def run_full_case(
         "noise_std": case.noise_std,
         "detected": start_index is not None,
         "detected_index": start_index,
+        "peak": peak,
         "compat_roundtrip_ok": compat_ok,
         "compat_error": compat_error,
         "recovered_text": recovered_text,
@@ -478,6 +495,8 @@ def parse_args() -> argparse.Namespace:
         help="Integer-like sample shift applied before synchronization.",
     )
     parser.add_argument("--symbol-count", type=int, default=512, help="Number of random payload symbols for sync tests.")
+    parser.add_argument("--guard-symbols", type=int, default=32, help="Zero-valued symbols added before and after the burst.")
+    parser.add_argument("--sync-max-lag", type=int, default=64, help="Maximum symbol lag to consider when scoring sync.")
     parser.add_argument("--sync-ser-threshold", type=float, default=0.2, help="Pass threshold for sync symbol error rate.")
     parser.add_argument(
         "--correlation-pad-samples",
@@ -503,24 +522,19 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    patch_datagram_pack()
     config = load_config(args.config)
 
     modem = ModulationProtocol(config)
     detector = BarkerDetector(config)
     rrc_filter = RRCFilter(config)
+    synchronizer = Synchronizer(config)
     datagram = make_datagram(args.message)
     cases = build_cases(args.cases, args.noise_std)
     rng = np.random.default_rng(args.seed)
 
-    selected_stages = ["modem", "barker", "sync", "full", "correlation"] if args.stage == "all" else [args.stage]
-    synchronizer = None
-    if any(stage in {"sync", "full"} for stage in selected_stages):
-        from synchronize import Synchronizer
-
-        synchronizer = Synchronizer(config)
-
     results: list[dict] = []
+    selected_stages = ["modem", "barker", "sync", "full", "correlation"] if args.stage == "all" else [args.stage]
+
     for case in cases:
         for stage in selected_stages:
             if stage == "modem":

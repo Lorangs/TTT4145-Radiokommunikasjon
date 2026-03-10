@@ -99,11 +99,13 @@ class Datagram():
 
     def pack(self) -> bytes:
         """Pack datagram into a single numpy array of uint8."""
-        return (self._msg_id.to_bytes(2, byteorder='big') +
-                bytes([self._msg_type.value]) + 
-                bytes([self._payload_size]) + 
-                self._payload.tobytes() + 
-                self._crc16.to_bytes(2, byteorder='big'))
+        return (
+            bytes([self._msg_id]) +
+            bytes([self._msg_type.value]) +
+            bytes([self._payload_size]) +
+            self._payload.tobytes() +
+            self._crc16.to_bytes(2, byteorder='big')
+        )
 
     @classmethod
     def unpack(cls, data: bytes) -> 'Datagram':
@@ -209,4 +211,3 @@ if __name__ == "__main__":
     print(f"Packed data: {packed_data}")
     unpacked_datagram = Datagram.unpack(packed_data)
     print(f"Unpacked datagram: {unpacked_datagram}")
-

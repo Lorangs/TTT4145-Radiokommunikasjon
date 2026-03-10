@@ -7,19 +7,16 @@ Perfect for testing end to end functionality of each module.
 """
 
 
-from yaml import safe_load
 import numpy as np
-from sdr_transciever import SDRTransciever
-from filter import RRCFilter
-from barker_code import BARKER_SYMBOLS
-from modulation import ModulationProtocol
-from datagram import Datagram, msgType
-from synchronize import Synchronizer
-
-from scipy import signal
-from time import sleep
-from sdr_plots import StaticSDRPlotter
 import matplotlib.pyplot as plt
+from yaml import safe_load
+
+from datagram import Datagram, msgType
+from filter import RRCFilter, BWLPFilter
+from modulation import ModulationProtocol
+from sdr_transciever import SDRTransciever
+from synchronize import Synchronizer
+from sdr_plots import StaticSDRPlotter
 
 
 
@@ -38,6 +35,7 @@ if __name__ == "__main__":
     sdr  = SDRTransciever(config)
     rrc_filter = RRCFilter(config)
     modulator = ModulationProtocol(config)
+    frontend_filter = BWLPFilter(config)
     synchronizer = Synchronizer(config)
     sps = int(config['modulation']['samples_per_symbol'])
     sample_rate = int(float(config['modulation']['sample_rate']))
@@ -48,15 +46,16 @@ if __name__ == "__main__":
         exit(1)
 
 
-    test_1 = np.ones(64, dtype=np.int8)  + 1j*np.ones(64, dtype=np.int8)  # Example test message (128 bytes of value 1)
-    test_2 = -np.ones(64, dtype=np.int8) - 1j*np.ones(64, dtype=np.int8)  # Example test message (128 bytes of value 1)
-    modulated_message = np.concatenate([test_1, test_2])  # Combine test messages to create a longer message
+    payload_text = "Scrambler test payload " * 4
+    datagram = Datagram.as_string(payload_text, msg_type=msgType.DATA)
+    tx_bits = modulator.pack_message_bits(datagram)
+    ones = int(np.count_nonzero(tx_bits))
+    zeros = int(tx_bits.size - ones)
+    print(f"Scrambled bit balance: zeros={zeros}, ones={ones}")
 
-    print(modulated_message)
-    #modulated_message = np.concatenate([BARKER_SYMBOLS[config['modulation']['type'].upper()][config['barker_sequence']['code_length']], modulated_message])  # Prepend Barker code for synchronization
-
+    modulated_message = modulator.modulate_message(datagram).astype(np.complex64)
     upsampled_message = np.zeros(len(modulated_message) * sps, dtype=np.complex64)
-    upsampled_message[::sps] = modulated_message  # Upsample by inserting zeros between symbols
+    upsampled_message[::sps] = modulated_message
 
     # zero pad to ensure we have enough samples for the filter to settle
     pad = np.zeros(len(rrc_filter.coefficients), dtype=np.complex64)  
@@ -79,8 +78,8 @@ if __name__ == "__main__":
     print(f"len received signal: {len(received_signal)} samples")
 
     coarse_corrected_signal = synchronizer.coarse_frequenzy_synchronization(received_signal)
-
-    filtered_signal = rrc_filter.apply_filter(coarse_corrected_signal) 
+    frontend_filtered_signal = frontend_filter.apply_filter(coarse_corrected_signal)
+    filtered_signal = rrc_filter.apply_filter(frontend_filtered_signal)
 
     plotter.plot_time_domain(filtered_signal, sample_rate, title="Time Domain of Filtered Signal Before Synchronization")
 
