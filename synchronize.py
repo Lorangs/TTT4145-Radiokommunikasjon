@@ -67,9 +67,9 @@ class Synchronizer:
         # compile the Numba-optimized functions with the specified parameters
         _costas_loop_njit(np.zeros(self.buffer_size, dtype=np.complex64), self.costas_alpha, self.costas_beta, self.modulation_order)
 
-    def set_noise_flood_dB(self, noise_floor_dB: float):
+    def set_noise_floor_dB(self, noise_floor_dB: float):
         """Set the noise floor in dB for adaptive thresholding."""
-        self.noise_floor_dB= 10**(noise_floor_dB/20) *
+        self.noise_floor_dB= 10**(noise_floor_dB/20)
 
     def coarse_frequenzy_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
         """Coarse frequency synchronization using FFT-based method.

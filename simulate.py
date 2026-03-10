@@ -21,7 +21,7 @@ from barker_detection import BarkerDetector
 from datagram import Datagram, msgType
 from filter import RRCFilter
 from modulation import ModulationProtocol
-from synchronize import Synchronizer
+from correlation import analyze_signal, build_reference_signal
 
 
 @dataclass
@@ -45,7 +45,12 @@ def patch_datagram_pack() -> None:
 
 def load_config(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as handle:
-        return safe_load(handle)
+        config = safe_load(handle)
+
+    barker_cfg = config.setdefault("barker_sequence", {})
+    if "correlation_scale_factor_threshold" not in barker_cfg:
+        barker_cfg["correlation_scale_factor_threshold"] = barker_cfg.get("correlation_threshold", 0.0)
+    return config
 
 
 def build_cases(case_names: Iterable[str], noisy_std: float) -> list[SimulationCase]:
@@ -280,7 +285,7 @@ def run_sync_case(
     case: SimulationCase,
     modem: ModulationProtocol,
     rrc_filter: RRCFilter,
-    synchronizer: Synchronizer,
+    synchronizer,
     rng: np.random.Generator,
     args: argparse.Namespace,
 ) -> dict:
@@ -338,7 +343,7 @@ def run_full_case(
     modem: ModulationProtocol,
     detector: BarkerDetector,
     rrc_filter: RRCFilter,
-    synchronizer: Synchronizer,
+    synchronizer,
     rng: np.random.Generator,
     args: argparse.Namespace,
 ) -> dict:
@@ -389,6 +394,53 @@ def run_full_case(
     }
 
 
+def run_correlation_case(
+    case: SimulationCase,
+    config: dict,
+    rng: np.random.Generator,
+    args: argparse.Namespace,
+) -> dict:
+    reference = build_reference_signal(config, args.message, 101)
+    pad = args.correlation_pad_samples
+    received = np.zeros(reference.size + 2 * pad, dtype=np.complex64)
+    received[pad : pad + reference.size] = reference
+    received = apply_channel(
+        received,
+        sample_rate=float(config["modulation"]["sample_rate"]),
+        rng=rng,
+        noise_std=case.noise_std,
+        freq_offset=args.freq_offset,
+        phase_offset=args.phase_offset,
+        timing_offset=args.timing_offset_samples,
+    )
+
+    result, _ = analyze_signal(
+        config=config,
+        reference=reference,
+        received=received,
+        sample_rate=float(config["modulation"]["sample_rate"]),
+        label=f"simulated_{case.name}",
+    )
+    expected_offset = pad + int(round(args.timing_offset_samples))
+    offset_error = result.sample_offset - expected_offset
+
+    return {
+        "stage": "correlation",
+        "case": case.name,
+        "noise_std": case.noise_std,
+        "expected_offset": expected_offset,
+        "detected_offset": result.sample_offset,
+        "offset_error": offset_error,
+        "normalized_peak": result.normalized_peak,
+        "phase_deg": result.peak_phase_deg,
+        "barker_peak": result.barker_peak,
+        "pass": (
+            abs(offset_error) <= args.correlation_offset_tolerance
+            and result.normalized_peak >= args.correlation_peak_threshold
+        ),
+    }
+
+
 def print_result(result: dict) -> None:
     headline = f"[{result['stage']}/{result['case']}]"
     fields = []
@@ -403,7 +455,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Simulate coherence between local SDR modules.")
     parser.add_argument(
         "--stage",
-        choices=["modem", "barker", "sync", "full", "all"],
+        choices=["modem", "barker", "sync", "full", "correlation", "all"],
         default="all",
         help="Which part of the pipeline to test.",
     )
@@ -427,6 +479,24 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--symbol-count", type=int, default=512, help="Number of random payload symbols for sync tests.")
     parser.add_argument("--sync-ser-threshold", type=float, default=0.2, help="Pass threshold for sync symbol error rate.")
+    parser.add_argument(
+        "--correlation-pad-samples",
+        type=int,
+        default=128,
+        help="Zero padding before and after the reference burst in correlation simulations.",
+    )
+    parser.add_argument(
+        "--correlation-peak-threshold",
+        type=float,
+        default=0.85,
+        help="Minimum normalized peak required for correlation pass.",
+    )
+    parser.add_argument(
+        "--correlation-offset-tolerance",
+        type=int,
+        default=1,
+        help="Maximum offset error in samples allowed for correlation pass.",
+    )
     parser.add_argument("--seed", type=int, default=7, help="Random seed for repeatable simulations.")
     return parser.parse_args()
 
@@ -439,12 +509,16 @@ def main() -> int:
     modem = ModulationProtocol(config)
     detector = BarkerDetector(config)
     rrc_filter = RRCFilter(config)
-    synchronizer = Synchronizer(config)
     datagram = make_datagram(args.message)
     cases = build_cases(args.cases, args.noise_std)
     rng = np.random.default_rng(args.seed)
 
-    selected_stages = ["modem", "barker", "sync", "full"] if args.stage == "all" else [args.stage]
+    selected_stages = ["modem", "barker", "sync", "full", "correlation"] if args.stage == "all" else [args.stage]
+    synchronizer = None
+    if any(stage in {"sync", "full"} for stage in selected_stages):
+        from synchronize import Synchronizer
+
+        synchronizer = Synchronizer(config)
 
     results: list[dict] = []
     for case in cases:
@@ -459,6 +533,8 @@ def main() -> int:
                 results.append(
                     run_full_case(case, datagram, modem, detector, rrc_filter, synchronizer, rng, args)
                 )
+            elif stage == "correlation":
+                results.append(run_correlation_case(case, config, rng, args))
 
     for result in results:
         print_result(result)
