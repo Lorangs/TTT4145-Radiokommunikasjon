@@ -94,17 +94,13 @@ class ModulationProtocol:
 
         # Reshape into pairs of bits
         bit_pairs = bits.reshape(-1, 2)
-        
-        # Vectorized mapping: [I, Q] components
-        # bit_pairs: [[b0, b1], [b2, b3], ...]
-        # Map: 00->1+1j, 01->-1+1j, 11->-1-1j, 10->1-1j
-        
+
         I = (1 - 2 * bit_pairs[:, 0]).astype(np.int8)  # First bit: 0->1, 1->-1
         Q = (1 - 2 * bit_pairs[:, 1]).astype(np.int8)  # Second bit: 0->1, 1->-1
         
         return (I + 1j*Q).astype(np.complex64)
     
-    def _qpsk_demodulate(self, symbols: np.array) -> Datagram:
+    def _qpsk_demodulate(self, symbols: np.ndarray) -> Datagram:
         """QPSK demodulation of the symbols to message bytes."""
 
         # Decision boundaries for I and Q
