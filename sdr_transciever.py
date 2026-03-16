@@ -91,7 +91,9 @@ class SDRTransciever:
             raise Exception("SDR not connected. Cannot measure noise floor.")
         
         try:
-            sleep_time = 2  # [s] Time to wait for the SDR to stabilize before taking measurements
+            self.sdr.tx_destroy_buffer() # Clear any existing data in the SDR's transmission buffer to avoid interference
+
+            sleep_time = 1  # [s] Time to wait for the SDR to stabilize before taking measurements
             logging.info(f"Measuring noise floor... Waiting for {sleep_time} seconds to stabilize.")
             from time import sleep
             sleep(sleep_time)

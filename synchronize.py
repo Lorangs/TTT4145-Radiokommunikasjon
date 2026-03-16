@@ -14,19 +14,20 @@ def interp_linear(x, i) -> np.complex64:
 
 
 @njit(cache=True, fastmath=True)
-def _gardner_njit(samples: np.ndarray, sps: int, Kp: float, Ki: float) -> tuple[np.ndarray, np.ndarray]:
+def _gardner_njit(samples: np.ndarray, sps: int = 8, Kp: float = 0.01, Ki: float = 0.0001) -> tuple[np.ndarray, np.ndarray]:
     mu = 0.0
-    omega = sps
+    omega = 1.0
     i = sps
-    out = []
-    errors = []
+    out = np.zeros(len(samples) // sps + 10, dtype=np.complex64)
+    errors = np.zeros(len(samples) // sps + 10, dtype=np.float32)
 
+    j = 0
     while i < len(samples) - sps:
         mid = interp_linear(samples, i + mu)
         early = interp_linear(samples, i + mu - sps//2)
         late = interp_linear(samples, i + mu + sps//2)
 
-        error = np.real((late - early) * np.conj(mid))
+        error = np.real((late - early) * np.conj(mid)) # ca |mid|² 
 
         omega += Ki * error
         mu += omega + Kp * error
@@ -35,9 +36,11 @@ def _gardner_njit(samples: np.ndarray, sps: int, Kp: float, Ki: float) -> tuple[
         mu -= step
         i += step
 
-        out.append(mid)
-        errors.append(error)
-    return np.array(out, dtype=np.complex64), np.array(errors, dtype=np.float32)
+        out[j] = mid
+        errors[j] = error
+
+        j += 1
+    return out, errors
 
 
 
@@ -93,8 +96,8 @@ class Synchronizer:
         self.sample_rate = self.sps * int(float(config['modulation']['symbol_rate']))
         self.nfft = int(config['synchronization']['nfft'])
 
-        self.correlation_threshold = float(config['barker_sequence']['correlation_threshold'])
-        self.noise_floor = 0.0 # linear scale, to be set after SDR connection
+        self.signal_power_threshold_dB = float(config['synchronization']['signal_power_threshold_dB'])
+        self.noise_floor_dB = 0.0 # linear scale, to be set after SDR connection
         
         # Calculate Costas loop parameters.
         loop_bw = float(config['synchronization']['costas_alpha']) * float(config['synchronization']['signal_bw']) / float(config['modulation']['sample_rate'])  # normalized loop bandwidth (as a fraction of the sample rate)
@@ -107,7 +110,7 @@ class Synchronizer:
 
         self.costas_Kp = 0.132
         self.costas_Ki = 0.00932
-        self.gardner_Kp = 0.05
+        self.gardner_Kp = 0.01
         self.gardner_Ki = 0.0001
 
         print(f"Costas loop parameters: Kp={self.costas_Kp:.6f}, Ki={self.costas_Ki:.6f}")
@@ -134,9 +137,10 @@ class Synchronizer:
         _costas_loop_njit(np.zeros(self.buffer_size, dtype=np.complex64), self.costas_Kp, self.costas_Ki, self.modulation_order)
         _gardner_njit(np.zeros(self.buffer_size, dtype=np.complex64), self.sps, self.gardner_Kp, self.gardner_Ki)
 
-    def set_noise_floor(self, noise_floor_dB: float):
+    def set_noise_floor(self, level_dB: float):
         """Set the noise floor in dB for adaptive thresholding."""
-        self.noise_floor = 10**(noise_floor_dB/10)  # Convert dB to linear scale  
+        print(f"Setting noise floor to {level_dB:.2f} dB")
+        self.noise_floor_dB = level_dB
 
     def coarse_frequenzy_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
         """Coarse frequency synchronization using FFT-based method.
@@ -150,12 +154,12 @@ class Synchronizer:
 
         estimated_frequenzy_offset = freqs[np.argmax(magnitude)] / self.modulation_order # Divide by modulation order to get the actual frequency offset
         
-        #signal_power_dB = 10 * np.log10(np.max(magnitude)**2)
-        #if signal_power_dB < self.noise_floor + self.signal_power_threshold_dB:
-        #    return None
+        signal_power_dB = 10 * np.log10(np.max(magnitude)**2)
+        if signal_power_dB < self.noise_floor_dB + self.signal_power_threshold_dB:
+            return None
 
-        time_vector = np.arange(len(received_signal)) / self.sample_rate
-        print(f"Estimated frequency offset: {estimated_frequenzy_offset:.2f} Hz")
+        time_vector = np.arange(self.buffer_size) / self.sample_rate
+        
         return received_signal * np.exp(-1j * 2 * np.pi * estimated_frequenzy_offset * time_vector)
 
     
@@ -206,7 +210,7 @@ if __name__ == "__main__":
     ##########################################
     # Test signal Parameters
     ##########################################
-    num_symbols = 1000  # Number of symbols in the test signal (excluding preamble)
+    num_symbols = 256  # Number of symbols in the test signal (excluding preamble)
     frequency_offset = 1000  # [Hz]
     timing_offset = 10.4 # [fraction of symbol period]
     snr_dB = 30 # [dB]
@@ -227,7 +231,7 @@ if __name__ == "__main__":
     signal_power = np.mean(np.abs(frequency_offset_signal)**2)
     noise_power = signal_power / (10**(snr_dB/10))
     noise = np.sqrt(noise_power/2) * (np.random.randn(len(frequency_offset_signal)) + 1j * np.random.randn(len(frequency_offset_signal)))
-    received_signal = frequency_offset_signal + noise
+    received_signal = frequency_offset_signal + noise 
 
     coarse_corrected_signal = synchronizer.coarse_frequenzy_synchronization(received_signal)
 
