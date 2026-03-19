@@ -43,8 +43,14 @@ filter:
   butterworth_cutoff_hz: 140e9        # Cutoff Freq. Adjust as needed 
 
 barker_sequence:
-  code_length: 13                     # Length of Barker code (choice: 7, 11 or 13)
+  code_length: 13                     # Preamble length in bits. True Barker codes exist up to 13; 14-70 use deterministic Barker-like PN sequences.
   correlation_threshold: 0.033          # Correlation threshold for preamble detection. Scale factor to acknowledge signal peaks above the noise floor. Adjust based on observed noise levels and signal strength.
+
+gold_sequence:
+  code_length: 31
+  code_index: 7
+  correlation_threshold: 0.7
+
 
 synchronization:
   nfft: 2048                   # FFT size for coarse frequency synchronization. 4096 provides a frequency resolution of sample_rate/nfft, which is approximately 500 Hz for a sample rate of 2 MHz. Adjust based on expected frequency offsets and desired resolution.

@@ -102,7 +102,3 @@ if __name__ == "__main__":
 
     sdr.sdr.tx_destroy_buffer() # Destroy the TX buffer to stop transmission after one message
                            
-
-
-
-    

@@ -15,6 +15,7 @@ class LFSRScrambler:
         - feedback is formed from taps 7 and 4
         - the all-zero state is forbidden because it would produce only zeros
     """
+    
     def __init__(self, seed: int = 0x5D, register_length: int = 7):
         if seed == 0:
             raise ValueError("Scrambler seed must be non-zero.")

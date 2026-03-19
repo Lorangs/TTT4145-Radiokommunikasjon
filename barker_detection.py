@@ -13,7 +13,8 @@ import logging
 class BarkerDetector:
     def __init__(self, config: dict):
         modulation_type = str(config['modulation']['type']).upper().strip()
-        code_length = int(config['barker_sequence']['code_length'])
+        barker_config = config['barker_sequence']
+        code_length = int(barker_config['code_length'])
 
         try:
             self.barker_symbols = BARKER_SYMBOLS[modulation_type][code_length]
@@ -23,7 +24,16 @@ class BarkerDetector:
                 f"code_length={code_length}"
             ) from exc
 
-        self.correlation_scale_factor_threshold = float(config['barker_sequence']['correlation_scale_factor_threshold'])
+        threshold = barker_config.get(
+            'correlation_scale_factor_threshold',
+            barker_config.get('correlation_threshold'),
+        )
+        if threshold is None:
+            raise ValueError(
+                "Missing Barker correlation threshold. Expected "
+                "'correlation_scale_factor_threshold' or 'correlation_threshold'."
+            )
+        self.correlation_scale_factor_threshold = float(threshold)
         self.noise_floor_dB = None  # To be set after SDR connection
 
     def set_noise_floor_dB(self, noise_floor_dB: float):

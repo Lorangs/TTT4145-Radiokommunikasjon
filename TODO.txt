@@ -1,35 +1,49 @@
 ##########################################
-# TODO 10.03.26
+# TODO 19.03.26
+# Note: `main.py` may be broken for now and is not part of the current test path.
 ##########################################
 
+
+Pad datagram to fixed size, zero pad after payload (?)  
+Fix pilot header 
+Add interleaving? 
+Fix synchronization
+
+
+
 # 0. Critical
--- Repair the runtime RX path in `main.py`: replace calls to missing methods (`read_noise_floor`, Barker detect path) and align it with the working simulation pipeline
--- Replace `main.py`'s call to `Synchronizer.time_synchronization()` with the working Gardner timing path, or rewrite `time_synchronization()` to return synchronized samples instead of an index
--- Add or move Barker detection into a real shared runtime path; `main.py` still calls missing `Synchronizer.barker_code_detection()`
+-- Fix stale config and active test-path issues:
+   `setup/config.yaml` currently sets `butterworth_cutoff_hz: 140e9`, which is invalid for the configured sample rate
+   make the active scripts use one consistent Barker threshold key
+-- Decide whether the Butterworth front-end filter should be part of the real RX path and wire it consistently if yes
+-- Keep the active validation path healthy:
+   `simulate.py`, `correlation.py`, and `simple_tester.py` should stay aligned and usable while `main.py` is inactive
 
 # 1. Need to have
--- Validate the new Butterworth LP filter on real SDR captures and decide whether it stays enabled by default
--- Validate the scrambler/descrambler on real SDR traffic, including ACK frames and short payloads
--- Encoder / Coding. Maybe a Recirsive Concolutional code instead of Hamming? 
-            " implementation: hard-decision code( Reed–Solomon)" - wiki together with an interleaver. 
--- ARQ / NAK
--- Implement a real Barker detection method in the runtime path, or move the correlation helper from `simulate.py` into a shared module
--- Verify end-to-end RX pipeline on real SDR captures: detect preamble, remove preamble, synchronize, demodulate, unpack datagram
--- Tune synchronization thresholds and loop parameters using recorded or live SDR data, not only synthetic simulations
--- Add automated tests for datagram packing/unpacking, modulation/demodulation, Barker detection, and synchronization stages
--- Clean up stale or inconsistent config keys and method names across `main.py`, `synchronize.py`, and helper scripts
--- Improve logging and error handling for SDR connection failures, CRC mismatches, and synchronization failures
--- Document how to run the current simulation harness and how to interpret pass/fail output
--- Add a hardware smoke test that follows the same staged checks as `simulate.py`
--- Add ACK / retransmission handling so lost packets are retried instead of silently dropped
+-- Add automated tests for:
+   datagram packing / unpacking and CRC failures
+   scrambler symmetry
+   modulation / demodulation round-trips
+   Barker detection / removal
+   synchronization stages
+-- Implement real ACK tracking with timeout / retransmission logic; the repo currently creates and sends ACKs but does not retry lost packets
+-- Fix stale helper examples and script entry points so they match the current APIs:
+   `chat_tui.py` still uses non-existent `Datagram.from_string()` / `Datagram.from_ack()`
+   `barker_detection.py` demo still calls non-existent `detect()`
+-- Fix `Datagram.as_string()` and `Datagram.as_bytes()` so they honor a caller-provided `msg_id`
+-- Improve logging and error handling around SDR connection failures, synchronization failures, and demodulation / CRC failures in the active scripts
+-- If `main.py` is brought back into use later:
+   repair the RX path to use `Synchronizer.set_noise_floor()`, Gardner timing, and a real Barker detection step
+   demodulate synchronized / Barker-stripped symbols rather than raw RX samples
+   fix cleanup to read `filter.hardware_filter_file` instead of `radio.hardware_filter_file`
 
 # 2. Nice to have
--- Move plotting utilities into a cleaner shared module with less coupling to runtime code
--- Add BER / SER reporting for simulation and live captures
+-- Add BER / SER reporting for live captures as well as simulation output
 -- Save debug IQ captures for offline replay and regression testing
 -- Add channel impairment simulation for multipath, phase noise, and sample-rate mismatch
 -- Add message statistics in the TUI, including retries, packet loss, and noise-floor estimates
 -- Add support for configurable frame formats and payload sizes
 -- Add optional FEC / interleaving for more robust links
+-- Move plotting / analysis utilities into a cleaner shared module with less coupling to runtime code
 -- Add richer hardware test scripts for TX-only, RX-only, and loopback validation
 -- Multiple radio support
