@@ -1,3 +1,10 @@
+"""
+This module defines the BarkerDetector class, 
+which is responsible for detecting Barker codes in a received signal 
+and removing them to extract the underlying message signal. 
+The Barker code is used as a preamble for synchronization and detection of incoming messages in the RadioGram system. 
+"""
+
 from scipy import signal
 import numpy as np
 from barker_code import BARKER_SYMBOLS

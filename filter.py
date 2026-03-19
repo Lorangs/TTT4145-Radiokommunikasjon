@@ -4,6 +4,8 @@ based on the parameters specified in the configuration file.
 The RRC filter is used for pulse shaping in digital communication systems to minimize inter-symbol interference (ISI). 
 The class also provides functionality to apply the filter to a signal and to 
 write the filter coefficients to a file for hardware implementation on an SDR.
+
+The BWLPFilter class implements an optional Butterworth low-pass filter that can be applied to the received signal after coarse frequency correction.
 """
 
 import logging 

@@ -1,0 +1,35 @@
+##########################################
+# TODO 10.03.26
+##########################################
+
+# 0. Critical
+-- Repair the runtime RX path in `main.py`: replace calls to missing methods (`read_noise_floor`, Barker detect path) and align it with the working simulation pipeline
+-- Replace `main.py`'s call to `Synchronizer.time_synchronization()` with the working Gardner timing path, or rewrite `time_synchronization()` to return synchronized samples instead of an index
+-- Add or move Barker detection into a real shared runtime path; `main.py` still calls missing `Synchronizer.barker_code_detection()`
+
+# 1. Need to have
+-- Validate the new Butterworth LP filter on real SDR captures and decide whether it stays enabled by default
+-- Validate the scrambler/descrambler on real SDR traffic, including ACK frames and short payloads
+-- Encoder / Coding. Maybe a Recirsive Concolutional code instead of Hamming? 
+            " implementation: hard-decision code( Reed–Solomon)" - wiki together with an interleaver. 
+-- ARQ / NAK
+-- Implement a real Barker detection method in the runtime path, or move the correlation helper from `simulate.py` into a shared module
+-- Verify end-to-end RX pipeline on real SDR captures: detect preamble, remove preamble, synchronize, demodulate, unpack datagram
+-- Tune synchronization thresholds and loop parameters using recorded or live SDR data, not only synthetic simulations
+-- Add automated tests for datagram packing/unpacking, modulation/demodulation, Barker detection, and synchronization stages
+-- Clean up stale or inconsistent config keys and method names across `main.py`, `synchronize.py`, and helper scripts
+-- Improve logging and error handling for SDR connection failures, CRC mismatches, and synchronization failures
+-- Document how to run the current simulation harness and how to interpret pass/fail output
+-- Add a hardware smoke test that follows the same staged checks as `simulate.py`
+-- Add ACK / retransmission handling so lost packets are retried instead of silently dropped
+
+# 2. Nice to have
+-- Move plotting utilities into a cleaner shared module with less coupling to runtime code
+-- Add BER / SER reporting for simulation and live captures
+-- Save debug IQ captures for offline replay and regression testing
+-- Add channel impairment simulation for multipath, phase noise, and sample-rate mismatch
+-- Add message statistics in the TUI, including retries, packet loss, and noise-floor estimates
+-- Add support for configurable frame formats and payload sizes
+-- Add optional FEC / interleaving for more robust links
+-- Add richer hardware test scripts for TX-only, RX-only, and loopback validation
+-- Multiple radio support

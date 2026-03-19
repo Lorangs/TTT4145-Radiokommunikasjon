@@ -9,14 +9,14 @@ transmitter:
   tx_gain_dB: 0                       # range: -90 to 0 dB
   tx_bandwidth: 1e6                   # TX bandwidth [Hz]
   tx_carrier: 866.505e6                 # TX local oscillator (carrier frequenzy)
-  tx_buffer_size: 1024                # 2**10 samples 
+  tx_buffer_size: 262144                # 2**18 samples 
 
 receiver: 
   rx_gain_dB: 0                     # range: 0 to 73 dB
   rx_bandwidth: 1e6                 # RX bandwidth [Hz]
   rx_carrier: 866.5e6                 # RX local oscillator (carrier frequenzy)
   gain_mode: 'manual'                 # "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
-  buffer_size: 2048                  # 2**15 samples      
+  buffer_size: 262144                  # 2**18 samples      
 
 modulation:
   type: "qpsk"                        # Modulation type: "BPSK", "QPSK", More to come
@@ -40,7 +40,7 @@ filter:
   hardware_filter_file: "rrc_filter_coefficients.ftr"  # File to store RRC filter coefficients for hardware filtering. Only used if rrc_filtering_enable is True.
   butterworth_enable: false           # 
   butterworth_order: 4                # Rolloff order 
-  butterworth_cutoff_hz: 140e3        # Cutoff Freq.
+  butterworth_cutoff_hz: 140e9        # Cutoff Freq. Adjust as needed 
 
 barker_sequence:
   code_length: 13                     # Length of Barker code (choice: 7, 11 or 13)

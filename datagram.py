@@ -1,3 +1,8 @@
+"""
+This module defines the Datagram class, which represents a structured message format for communication.
+"""
+
+
 import numpy as np
 from dataclasses import dataclass
 from barker_code import BARKER_BITS
