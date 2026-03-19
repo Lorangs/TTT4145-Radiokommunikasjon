@@ -49,6 +49,12 @@ def encoder(data: np.ndarray, generator: np.ndarray) -> np.ndarray:
 
     return encoded_bits
 
+def viterbi_decoder_soft(received: np.ndarray, generator: np.ndarray) -> np.ndarray:
+    # Placeholder for soft-decision Viterbi decoder implementation
+    # This function should compute the most likely input sequence given the received bits and the generator matrix
+    # For now, it just returns a dummy array of zeros with the same length as the input data
+    return np.zeros(len(received) // n, dtype=np.uint8)
+
 
 
 
