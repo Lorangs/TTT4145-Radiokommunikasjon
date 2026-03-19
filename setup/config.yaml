@@ -6,10 +6,10 @@ radio:
 
 transmitter:
   tx_cyclic_buffer: True             # Enable/disable cyclic buffer
-  tx_gain_dB: 0                       # range: -90 to 0 dB
+  tx_gain_dB: 0                     # range: -90 to 0 dB
   tx_bandwidth: 1e6                   # TX bandwidth [Hz]
-  tx_carrier: 866.505e6                 # TX local oscillator (carrier frequenzy)
-  tx_buffer_size: 262144                # 2**18 samples 
+  tx_carrier: 866.5e6                 # TX local oscillator (carrier frequenzy)
+  tx_buffer_size: 1024                # 2**10 samples 
 
 receiver: 
   rx_gain_dB: 0                     # range: 0 to 73 dB
@@ -49,6 +49,7 @@ barker_sequence:
 synchronization:
   nfft: 2048                   # FFT size for coarse frequency synchronization. 4096 provides a frequency resolution of sample_rate/nfft, which is approximately 500 Hz for a sample rate of 2 MHz. Adjust based on expected frequency offsets and desired resolution.
   signal_bw: 1e6                  # Loop bandwidth for Costas loop in Hz. Determines how quickly the loop can track frequency and phase variations. A common choice is around 1-5% of the symbol rate, so for a symbol rate of 125 kHz, a bandwidth of 2500 Hz (2% of symbol rate) is a reasonable starting point. Adjust based on expected frequency offsets and noise conditions.
+  signal_power_threshold_dB: 1.0     # Threshold level above the measured noise floor in dB for considering a signal presence.
   costas_zeta: 0.707                     # Damping factor for Costas loop. A value of 0.707 (1/sqrt(2)) provides critical damping, which is a common choice for stable and responsive loop behavior. Adjust based on desired trade-off between stability and responsiveness.
   costas_K0: 1.0                         # VCO gain for costas loop.    
   costas_alpha: 0.02                    # Proportional gain for Costas loop (alternative to loop bandwidth). Adjust based on desired loop response. Ignored if costas_loop_bw is set.

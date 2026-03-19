@@ -41,10 +41,12 @@ if __name__ == "__main__":
     sample_rate = int(float(config['modulation']['sample_rate']))
 
 
+
     if sdr.connect() == False:
         print("Failed to connect to SDR. Exiting.")
         exit(1)
 
+    synchronizer.set_noise_floor(sdr.measure_noise_floor_dB())  # Measure noise floor and set it in the synchronizer for adaptive thresholding
 
     payload_text = "Scrambler test payload " * 4
     datagram = Datagram.as_string(payload_text, msg_type=msgType.DATA)
@@ -58,7 +60,8 @@ if __name__ == "__main__":
     upsampled_message[::sps] = modulated_message
 
     # zero pad to ensure we have enough samples for the filter to settle
-    pad = np.zeros(len(rrc_filter.coefficients), dtype=np.complex64)  
+    print(f"len filter taps: {len(rrc_filter.coefficients)}")
+    pad = np.zeros(len(rrc_filter.coefficients) - 1, dtype=np.complex64)  
     modulated_message = np.concatenate([pad, upsampled_message, pad])
     
     modulated_message = rrc_filter.apply_filter(modulated_message) 
@@ -73,7 +76,6 @@ if __name__ == "__main__":
 
 
     received_signal = sdr.sdr.rx()
-    received_signal /= np.sqrt(np.mean(np.abs(received_signal)**2))  # Normalize received signal power
 
     print(f"len received signal: {len(received_signal)} samples")
 
@@ -93,10 +95,9 @@ if __name__ == "__main__":
     plotter.plot_constellation(time_synchronized_signal, title="Constellation after Gardner Timing Synchronization")
     plotter.plot_constellation(coarse_corrected_signal, title="Constellation after Coarse Frequency Synchronization")
     plotter.plot_eye_diagram(time_synchronized_signal, sps, title="Eye Diagram after Gardner Timing Synchronization")
-    plotter.plot_constellation(received_signal, title="Constellation of Received Signal (No Synchronization)")
-    plotter.plot_psd(filtered_signal, sample_rate, title="PSD of Received Signal")
+    plotter.plot_constellation(filtered_signal, title="Constellation of Received Signal (No Synchronization)")
+    plotter.plot_psd(received_signal, sample_rate, title="PSD of Received Signal")
 
-   
     plt.show()
 
     sdr.sdr.tx_destroy_buffer() # Destroy the TX buffer to stop transmission after one message

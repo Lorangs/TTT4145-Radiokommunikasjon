@@ -64,23 +64,30 @@ class RRCFilter:
                 h[i] = 1 + self.rolloff * (4 / np.pi - 1)
             
             elif np.abs(t) == self.symbol_periode / (4 * self.rolloff):
-                h[i] = (
+                h[i] = ((
                         self.rolloff / np.sqrt(2)
                     ) * (
                         (1 + 2/np.pi) * np.sin(np.pi/(4*self.rolloff)) + 
                         (1 - 2/np.pi) * np.cos(np.pi/(4*self.rolloff))
-                        )
+                    )
+                )
             else:
-                h[i] = (
-                    np.sin(np.pi * (t / self.symbol_periode) * (1 - self.rolloff))  + 
-                    4 * self.rolloff * t / self.symbol_periode * 
-                    np.cos(np.pi * (t / self.symbol_periode) * (1 + self.rolloff))
-                ) / (
-                    np.pi * (t / self.symbol_periode) * (1 - (4 * self.rolloff * t / self.symbol_periode)**2)
+                h[i] = ((
+                        np.sin(np.pi * (t / self.symbol_periode) * (1 - self.rolloff))  + 
+                        4 * self.rolloff * t / self.symbol_periode * 
+                        np.cos(np.pi * (t / self.symbol_periode) * (1 + self.rolloff))
+                    ) / (
+                        np.pi * (t / self.symbol_periode) * (1 - (4 * self.rolloff * t / self.symbol_periode)**2)
+                    )
                 )
             
         h = h / np.sqrt(np.sum(h**2))  # Normalize filter coefficients to unit energy
         return time_vector, h
+
+    def pad_signal_front_and_back(self, signal: np.ndarray) -> np.ndarray:
+        """Pad the input signal with zeros at the front and back to ensure that the filter can be applied without losing data at the edges."""
+        padding = np.zeros(len(self.coefficients) // 2, dtype=signal.dtype)
+        return np.concatenate((padding, signal, padding))
 
     def apply_filter(self, received_signal: np.ndarray) -> np.ndarray:
         """Apply RRC filter to the input signal."""
