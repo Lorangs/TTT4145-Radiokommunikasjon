@@ -29,6 +29,8 @@ coding:
   rs_num_ecc: 16                       # Number of error correction codewords for Reed-Solomon coding. 
   interleaver_seed: 42                 # Seed for random interleaver. Must be the same for transmitter and receiver to ensure correct deinterleaving.
   interleaver_length: 1024             # Length of the interleaver. Must be the same for transmitter and receiver to ensure correct deinterleaving.
+  convolutional_K: 7                   # Memory length (constraint length) for convolutional coding. Choices are 3, 5 or 7.
+  convolutional_datarate: "1/4"        # Code rate for convolutional coding. Choices are "1/2", "1/3", "1/4".
   scrambler_register_length: 7         # 
 
 filter:

@@ -6,9 +6,30 @@ ensure only one bit transition per symbol change
 """
 
 import numpy as np
+import numba 
 
-K = 7  # Constraint length (number of memory elements in the shift register)
-DATARATE = "1/4"
+
+class ConvolutionalCoder:
+    def __init__(self, config: dict):
+        self.K = int(config['coding']['convolutional_K'])
+        self.DATARATE = config['coding']['convolutional_datarate']
+        self.GENERATOR = get_generator_matrix(self.K, self.DATARATE)
+        self.n = self.GENERATOR.shape[0]  # number of output bits per input bit
+
+        # run encode and decode once to trigger numba compilation before the first real use
+        dummy_input = np.array([0, 1, 0], dtype=np.uint8)
+        self.encode(dummy_input)
+        self.decode(self.encode(dummy_input))
+        
+    def encode(self, input_bits: np.ndarray, ramp_down: bool = True) -> np.ndarray:
+        """Encode input bits using a convolutional code with datarate 1/4."""
+        return _encode(input_bits, self.GENERATOR, self.K, self.n, ramp_down)
+    
+    def decode(self, received_bits: np.ndarray, ramp_down: bool = True) -> np.ndarray:
+        """Decode received bits using the Viterbi algorithm with hard decision."""
+        return _viterbi_decode_hard(received_bits, self.GENERATOR, self.K, self.n, ramp_down)
+    
+
 
 # Known good generator polynomials (octal)
 GENERATOR_TABLE = {
@@ -50,19 +71,22 @@ def get_generator_matrix(K, rate="1/2") -> np.ndarray:
         dtype=np.uint8
     )
 
-GENERATOR = get_generator_matrix(K, DATARATE)
-n = GENERATOR.shape[0]  # number of output bits per input bit
-k = K  # number of bits in the shift register (including the input bit)
-
-
-def encode(input_bits: np.ndarray, ramp_down: bool = True) -> np.ndarray:
+@numba.njit(fastmath=True, cache=True)
+def _encode(
+    input_bits: np.ndarray, 
+    G: np.ndarray, 
+    k: int, 
+    n: int, 
+    ramp_down: bool = True) -> np.ndarray:
     """Encode input bits using a convolutional code with datarate 1/4."""
 
-    # Pad the input bits with zeros to flush the shift register at the end of the message.
     if ramp_down:
-        padded_msg = np.concatenate([np.zeros(k-1, dtype=np.uint8), input_bits, np.zeros(k-1, dtype=np.uint8)])
+        padded_len = (k - 1) + input_bits.size + (k - 1)
     else:
-        padded_msg = np.concatenate([np.zeros(k-1, dtype=np.uint8), input_bits])
+        padded_len = (k - 1) + input_bits.size
+    
+    padded_msg = np.zeros(padded_len, dtype=np.uint8)
+    padded_msg[(k-1):(k-1)+input_bits.size] = input_bits
 
     num_symbols = padded_msg.size - (k-1)
     shift_register = np.zeros(k, dtype=np.uint8)
@@ -70,12 +94,19 @@ def encode(input_bits: np.ndarray, ramp_down: bool = True) -> np.ndarray:
 
     for i in range(num_symbols):
         shift_register = padded_msg[i:i+k]  # Shift in the next bit
-        output_bits[i*n : (i+1)*n] = np.mod(np.dot(shift_register, GENERATOR.T), 2)
+
+        # Manual dot product to avoid ambiguity
+        for j in range(n):
+            output_bits[i*n + j] = np.uint8(np.sum(shift_register * G[j, :]) % 2)
 
     return output_bits
 
-def viterbi_decode_hard(
+@numba.njit(fastmath=True, cache=True)
+def _viterbi_decode_hard(
         received_bits: np.ndarray,
+        G: np.ndarray,
+        k: int,
+        n: int,
         ramp_down: bool = True) -> np.ndarray:
     """Decode received bits using the Viterbi algorithm with hard decision."""
     if received_bits.size % n != 0:
@@ -108,7 +139,10 @@ def viterbi_decode_hard(
                     dtype=np.uint8
                 )
 
-                expected_output = np.mod(np.dot(GENERATOR, shift_register), 2)
+                expected_output = np.zeros(n, dtype=np.uint8)
+                for j in range(n):
+                    expected_output[j] = np.uint8(np.sum(shift_register * G[j, :]) % 2)
+
                 hamming_distance = np.sum(expected_output != rx)
 
                 # update path metric if this transition is better
@@ -136,25 +170,27 @@ def viterbi_decode_hard(
 
 
 if __name__ == "__main__":
+    coder = ConvolutionalCoder(config={
+        'coding': {
+            'convolutional_K': 7,
+            'convolutional_datarate': "1/4"
+        }
+    })
 
     test_string = "H"
     test_bytes = np.frombuffer(test_string.encode('utf-8'),dtype=np.uint8) 
     test_bits = np.unpackbits(test_bytes)
-    #test_bits = np.array([1,0,0,0,0,0,0,0], dtype=np.uint8)
-    #test_bits = np.array([1, 1, 1], dtype=np.uint8)
+    
     print("Input bits:")
     print(test_bits)
     print()
 
-    print("Generator matrix:")
-    print(GENERATOR)
-    print()
-    
+    encoded_bits = coder.encode(test_bits)
     print("Encoded bits:")
-    code_word = encode(test_bits, ramp_down=True)
-    print(code_word)
+    print(encoded_bits)
+    print()
 
-    decoded = viterbi_decode_hard(code_word)
-
+    decoded_bits = coder.decode(encoded_bits)
     print("Decoded bits:")
-    print(decoded)
+    print(decoded_bits)
+    print()
