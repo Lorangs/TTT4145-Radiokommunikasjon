@@ -18,3 +18,5 @@ __pycache__/
 
 #ignore filter coefficient files
 *.ftr.env
+
+convolutional_coder_v2.py

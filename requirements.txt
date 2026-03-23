@@ -34,6 +34,7 @@ pyqtgraph==0.14.0
 pytest==9.0.2
 python-dateutil==2.9.0.post0
 PyYAML==6.0.3
+reedsolo==1.7.0
 scikit-commpy==0.8.0
 scipy==1.17.0
 sinter==1.15.0

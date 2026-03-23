@@ -26,11 +26,10 @@ modulation:
 
 coding:
   channel_coding_scheme: "hamming"     # Channel coding scheme: "hamming", More to come
-  hamming_n: 15                        # Hamming code parameter n (total codeword length)
-  hamming_k: 11                        # Hamming code parameter k (data length)
-  scrambler_enable: true                # 
-  scrambler_seed: 93                    # 
-  scrambler_register_length: 7          # 
+  rs_num_ecc: 16                       # Number of error correction codewords for Reed-Solomon coding. 
+  interleaver_seed: 42                 # Seed for random interleaver. Must be the same for transmitter and receiver to ensure correct deinterleaving.
+  interleaver_length: 1024             # Length of the interleaver. Must be the same for transmitter and receiver to ensure correct deinterleaving.
+  scrambler_register_length: 7         # 
 
 filter:
   rrc_roll_off: 0.5                   # Roll-off factor (alpha) for pulse shaping filter

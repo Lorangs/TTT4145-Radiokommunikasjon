@@ -5,10 +5,12 @@ Wrapper class for interleaving and deinterleaving bits using a random interleave
 from commpy.channelcoding import RandInterlv
 import numpy as np
 
-SEED = 42  # Fixed seed for reproducibility
+
 
 class Interleaver:
-    def __init__(self, length: int, seed: int = SEED):
+    def __init__(self, config: dict):
+        seed = int(config['coding']['interleaver_seed'])
+        length = int(config['coding']['interleaver_length'])
         self.interleaver = RandInterlv(length, seed)
 
     def interleave(self, encoded_bits: np.ndarray) -> np.ndarray:
@@ -22,7 +24,12 @@ class Interleaver:
 
 if __name__ == "__main__":
     # Example usage
-    interleaver = Interleaver(length=10, seed=SEED)
+    interleaver = Interleaver(config={
+        'coding': {
+            'interleaver_seed': 42,
+            'interleaver_length': 10
+        }
+    })
     test_bits = np.array([0, 1, 1, 0, 1, 0, 0, 1, 1, 0], dtype=np.uint8)
     
     print("Original bits:")
