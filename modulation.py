@@ -1,162 +1,55 @@
-"""
-Message Protocol Module.
-Defines message structure, creation, parsing, modulation, and demodulation.
-
-Includes CRC16 verification and optional payload scrambling in the bit domain.
-
-Modulation Types Supported:
-    - BPSK
-    - QPSK
-"""
-
+from commpy import modulation
 import numpy as np
-
-from datagram import msgType, Datagram
-from scrambler import LFSRScrambler
-
 
 class ModulationProtocol:
     def __init__(self, config: dict):
-        """Initialize Message Protocol with given configuration."""
-        self.modulation_type = str(config['modulation']['type']).upper().strip()
-        self.sps = int(config['modulation']['samples_per_symbol'])
-        coding_cfg = config.get("coding", {})
-        self.scrambler_enable = bool(coding_cfg.get("scrambler_enable", False))
-        self.scrambler = LFSRScrambler(
-            seed=int(coding_cfg.get("scrambler_seed", 0x5D)),
-            register_length=int(coding_cfg.get("scrambler_register_length", 7)),
-        )
-
-
-    # ================= Upsampling and Downsampling =================
-    def upsample_symbols(self, symbols: np.array) -> np.array:
-        """Upsample symbols by repeating each symbol N times."""
-        upsampled =  np.zeros(len(symbols) * self.sps, dtype=symbols.dtype)
-        upsampled[::self.sps] = symbols
-        return upsampled
-    
-    def downsample_symbols(self, symbols: np.array, delay: int) -> np.array:
-        """Downsample symbols by taking every N-th sample."""
-        return symbols[delay::self.sps]
-
-    def scramble_bits(self, bits: np.ndarray) -> np.ndarray:
-        if not self.scrambler_enable:
-            return bits.astype(np.uint8, copy=True)
-        return self.scrambler.apply(bits)
-
-    def descramble_bits(self, bits: np.ndarray) -> np.ndarray:
-        if not self.scrambler_enable:
-            return bits.astype(np.uint8, copy=True)
-        return self.scrambler.apply(bits)
-
-    def pack_message_bits(self, message: Datagram) -> np.ndarray:
-        message_bytes = message.pack()
-        bits = np.unpackbits(np.frombuffer(message_bytes, dtype=np.uint8))
-        return self.scramble_bits(bits)
-
-    def unpack_message_bits(self, bits: np.ndarray) -> Datagram:
-        descrambled_bits = self.descramble_bits(bits)
-        byte_array = np.packbits(descrambled_bits)
-        return Datagram.unpack(byte_array.tobytes())
-
-    def decision_bits_from_symbols(self, symbols: np.ndarray) -> np.ndarray:
-        if self.modulation_type == "BPSK":
-            return (symbols > 0).astype(np.uint8)
-
-        if self.modulation_type == "QPSK":
-            i_bits = (symbols.real < 0).astype(np.uint8)
-            q_bits = (symbols.imag < 0).astype(np.uint8)
-            bits = np.empty(i_bits.size + q_bits.size, dtype=np.uint8)
-            bits[0::2] = i_bits
-            bits[1::2] = q_bits
-            return bits
-
-        raise NotImplementedError(f"Demodulation type {self.modulation_type} not implemented.")
-    
-    
-    # ================= Modulation and Demodulation =================
-    def modulate_message(self, message: Datagram) -> np.ndarray:
-        """Placeholder for modulation function based on modulation type."""
+        modulation_config = config['modulation']
+        modulation_type = str(modulation_config['type']).upper().strip()
+        modulation_order = int(modulation_config['order'])
         
-        if self.modulation_type == "BPSK":
-            return self._bpsk_modulate(message)
-        elif self.modulation_type == "QPSK":
-            return self._qpsk_modulate(message)
+        
+        if modulation_type == "PSK":
+            self.modulator = modulation.PSKModem(modulation_order)
+
+        elif modulation_type == "QAM":
+            self.modulator = modulation.QAMModem(modulation_order)
         else:
-            raise NotImplementedError(f"Modulation type {self.modulation_type} not implemented.")
-        
-    def demodulate_message(self, symbols: np.ndarray) -> Datagram:
-        """Placeholder for demodulation function based on modulation type."""
-        
-        if self.modulation_type == "BPSK":
-            return self._bpsk_demodulate(symbols)
-        elif self.modulation_type == "QPSK":
-            return self._qpsk_demodulate(symbols)
-        else:
-            raise NotImplementedError(f"Demodulation type {self.modulation_type} not implemented.")
-        
-        
-    def _bpsk_modulate(self, message: Datagram) -> np.ndarray:
-        """BPSK modulation of the message bytes."""
-        bits = self.pack_message_bits(message)
+            raise ValueError(f"Unsupported modulation type: {modulation_type}")
 
-        # Map bits to BPSK symbols: 0 -> 1, 1 -> -1
-        return (2 * bits - 1).astype(np.int8)
+    def modulate_message(self, bit_stream: np.ndarray) -> np.ndarray:
+        """Modulate a bit stream into a complex baseband signal."""
+        return self.modulator.modulate(bit_stream)
     
-    def _bpsk_demodulate(self, symbols: np.ndarray) -> Datagram:
-        """BPSK demodulation of the symbols to message bytes."""
-        bits = self.decision_bits_from_symbols(symbols)
-        return self.unpack_message_bits(bits)
+    def demodulate_signal(self, signal: np.ndarray) -> np.ndarray:
+        """Demodulate a complex baseband signal back into a bit stream."""
+        return self.modulator.demodulate(signal, demod_type='hard')
     
-
-    def _qpsk_modulate(self, message: Datagram) -> np.ndarray:
-        """QPSK modulation of the message bytes."""
-        bits = self.pack_message_bits(message)
-
-        # Reshape into pairs of bits
-        bit_pairs = bits.reshape(-1, 2)
-
-        I = (1 - 2 * bit_pairs[:, 0]).astype(np.int8)  # First bit: 0->1, 1->-1
-        Q = (1 - 2 * bit_pairs[:, 1]).astype(np.int8)  # Second bit: 0->1, 1->-1
-        
-        return (I + 1j*Q).astype(np.complex64)
-    
-    def _qpsk_demodulate(self, symbols: np.ndarray) -> Datagram:
-        """QPSK demodulation of the symbols to message bytes."""
-        bits = self.decision_bits_from_symbols(symbols)
-        return self.unpack_message_bits(bits)
-    
-
-
 if __name__ == "__main__":
     from sdr_plots import StaticSDRPlotter
-    from matplotlib.pyplot import show
-
-    modulation_protocol = ModulationProtocol("config.yaml")
 
     plotter = StaticSDRPlotter()
 
+    modulation_config = {
+        'modulation': {
+            'type': 'PSK',
+            'order': 8      # QPSK modulation
+        }
+    }
+    protocol = ModulationProtocol(modulation_config)
 
-    test_payload = b"He"
+    test_bits = np.random.randint(0, 2, 99)  # Generate a random bit stream of length 100
+    modulated_signal = protocol.modulate_message(test_bits)
+    print("Modulated signal:")
+    print(modulated_signal)
 
-    message = Datagram(payload=np.frombuffer(test_payload, dtype=np.uint8), msg_type=msgType.DATA)
-    print(f"Created Message: {message}")
+    plotter.plot_constellation(modulated_signal, title="Modulated Signal Constellation")
 
+    demodulated_bits = protocol.demodulate_signal(modulated_signal)
 
-    modulated_symbols = modulation_protocol.modulate_message(message)
+    if np.all(test_bits == demodulated_bits):
+        print("Demodulation successful, bits match!")
+    else:        
+        print("Demodulation failed, bits do not match.")
 
-    # pad to simulate delay
-    delay = np.array([1+1j]*50, dtype=np.complex64)
-    modulated_symbols = np.concatenate((delay, modulated_symbols))
-    print(f"Modulated Symbols: {message}")
-
-
-    # add AWGN noise as channel simulator
-    noise_I = np.random.normal(0, 0.2, modulated_symbols.shape)
-    noise_Q = np.random.normal(0, 0.2, modulated_symbols.shape)
-    noise = noise_I + 1j*noise_Q
-    modulated_symbols = modulated_symbols + noise
-
-    plotter.plot_constellation(modulated_symbols, title="Received Symbols with Noise")
-    show()
-
+    from matplotlib import pyplot as plt
+    plt.show()

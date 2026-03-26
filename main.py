@@ -34,6 +34,9 @@ from sdr_transciever import SDRTransciever
 from filter import RRCFilter
 from gold_detection import GoldCodeDetector
 from synchronize import Synchronizer
+from forward_error_correction import FCCodec
+from convolutional_coder import ConvolutionalCoder
+from interleaver import Interleaver
 
 
 # ================= read configuration file =================
@@ -71,7 +74,7 @@ class SDRChatApp:
         self.sdr = SDRTransciever(config) # must be initilized after Matched Filter module.
 
         # ================== Threading and synchronization primitives ==================
-        self.running: bool = False
+        self.stop_event: threading.Event = threading.Event()
         self.rx_thread: threading.Thread = None
         self.tx_thread: threading.Thread = None
         self.tui_thread: threading.Thread = None
@@ -125,7 +128,7 @@ class SDRChatApp:
             logging.debug("Failed to connect to SDR.")
             return False
         
-        self.running = True
+        self.stop_event.clear()
         self.rx_thread = threading.Thread(target=self._rx_loop, daemon=True, name="RX_Thread")
         self.tx_thread = threading.Thread(target=self._tx_loop, daemon=True, name="TX_Thread")
         self.tui_thread = threading.Thread(target=self._tui_loop, daemon=True, name="TUI_Thread")
@@ -141,7 +144,7 @@ class SDRChatApp:
     def stop(self):
         """Stop the SDR Chat Application."""
         logging.info("Stopping SDR Chat Application...")
-        self.running = False
+        self.stop_event.set()
 
         # Wait for threads to finish
         if self.rx_thread and self.rx_thread.is_alive():
@@ -253,7 +256,7 @@ class SDRChatApp:
         """Receive loop - continuously receive data from SDR and process it."""
         logging.info("RX loop started.")
 
-        while self.running:
+        while not self.stop_event.is_set():
             try:
                 received_signal = self.sdr.sdr.rx()
 
@@ -312,9 +315,10 @@ class SDRChatApp:
         """Transmit loop - continuously check for outgoing messages and transmit them."""
         logging.info("TX loop started.")
 
-        while self.running:
+        while not self.stop_event.is_set():
             try:
                 datagram: Datagram = self.tx_queue.get(timeout=0.1)  # Wait for message to send
+                
                 modulated_signal = self.modulation_protocol.modulate_message(datagram)
                 signal_with_gold = self.gold_detector.add_gold_symbols(modulated_signal)
                 upsampled_signal = self.modulation_protocol.upsample_symbols(signal_with_gold)
@@ -346,7 +350,7 @@ class SDRChatApp:
 
         self.tui.render_screen()  # Initial render of TUI
 
-        while self.running:
+        while not self.stop_event.is_set():
             try:
 
                 # Wait for either: screen refresh event OR stdin input (max 0.5s timeout)
@@ -374,13 +378,21 @@ class SDRChatApp:
                         continue  # Ignore unknown commands
 
                     # send message as datagram
+                    while len(user_input.encode('utf-8')) > 254:
+                        logging.warning("Input message is too long and will be truncated to fit payload size.")
+                        sliced_user_input = user_input[:254]
+                        datagram = Datagram.as_string(user_input, msg_type=msgType.DATA)
+                        self.queue_datagram(datagram)
+                        user_input = user_input[254:]  # Remove the part that was sent
+                   
+                    # Final slice (or if input was already short enough)
                     datagram = Datagram.as_string(user_input, msg_type=msgType.DATA)
                     self.queue_datagram(datagram)
                     self.tui.add_message(datagram)  # Add sent message to TUI display
                     self.tui.render_screen()  # Update TUI display after sending message
-                    self.chat_history_log(f"Sent: [ID:{datagram.get_msg_id}]\t{user_input}")
+                    self.chat_history_log(f"Sent: [ID:{datagram.get_msg_id}]\t{sliced_user_input}")
 
-      
+        
             except Exception as e:
                 logging.error(f"Error in TUI loop: {e}")
                 continue
@@ -465,7 +477,7 @@ class SDRChatApp:
     def _signal_handler(self, signum, frame):
         """Handle termination signals for graceful shutdown."""
         logging.info(f"Signal {signum} received. Initiating graceful shutdown...")
-        self.running = False
+        self.stop_event.set()
 
     def _cleanup(self):
         """Clean up resources, stop threads, and disconnect SDR. This function is designed to be idempotent and can be safely called multiple times."""
@@ -475,8 +487,8 @@ class SDRChatApp:
                 logging.info("Starting cleanup...")
 
                 # 1. Stop all threads and signal them to shutdown
-                if hasattr(self, 'running'):
-                    self.running = False  # Signal threads to stop
+                if hasattr(self, 'stop_event'):
+                    self.stop_event.set()
 
                 # 2. Close debug plots before joining threads
                 if hasattr(self, 'plotter') and self.plotter is not None:
@@ -565,7 +577,7 @@ if __name__ == "__main__":
         logging.info("Entering main loop. Press Ctrl+C to exit.")
         
         # Main loop - process Qt events if debug mode is enabled
-        while app.running:
+        while not app.stop_event.is_set():
             if app.debug_mode and app.qapp is not None:
                 # Process Qt events to keep plotter responsive
                 app.qapp.processEvents()

@@ -1,5 +1,9 @@
 """
 implementation of reed-solomon codes and convolutional codes for forward error correction (FEC)
+For 32 ECC symbols, the algorithm can correct up to 128 byte errors in the original message.
+For 16 ECC symbols. The algorithm adds 64 bytes of redundancy to the original message.
+For 8 ECC symbols, it adds 32 bytes of redundancy
+
 """
 
 from reedsolo import RSCodec, ReedSolomonError
@@ -28,37 +32,45 @@ class FCCodec:
 
 
 if __name__ == "__main__":
+    from datagram import Datagram, msgType
+
     fc_codec = FCCodec(config={
         'coding': {
-            'rs_num_ecc': 16
+            'rs_num_ecc': 32
         }
     })
 
 
-    test_msg = "Hello, World!"
-    original_data = np.frombuffer(test_msg.encode('utf-8'), dtype=np.uint8)
+    datagram = Datagram.as_string(msg_id=4, msg_type=msgType.DATA, text="Hello, World!")
     print("Original data:")
-    print(original_data)
+    print(datagram)
 
-    encoded_data = fc_codec.encode(original_data)
+    bytes_arr = np.frombuffer(datagram.pack(), dtype=np.uint8)
+    print("Packed data:")
+    print(bytes_arr)
+
+    encoded_data = fc_codec.encode(bytes_arr)
     print("Encoded data:")
     print(encoded_data)
+    print(f"added bytes:\t{len(encoded_data) - len(bytes_arr)}")
     print()
 
     # Introduce some errors for testing
     for i in range(fc_codec.num_ecc + 1):
         print(f"Number of errors: {i+1}")
         encoded_data[i] ^= 0xFF  # Flip bits to simulate errors
-        print("Corrupted encoded data:")
-        print(encoded_data)
+        #print("Corrupted encoded data:")
+        #print(encoded_data)
 
 
         decoded_data = fc_codec.rs_decode(encoded_data)
         if decoded_data is not None:
             print("Decoded data:")
-            print(np.frombuffer(decoded_data, dtype=np.uint8))
+            #print(np.frombuffer(decoded_data, dtype=np.uint8))
             print()
         else :
             print(f"Failed to decode data with {i+1} errors.\n")
+
+    
 
     
