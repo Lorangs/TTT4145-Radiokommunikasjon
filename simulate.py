@@ -17,10 +17,10 @@ from typing import Iterable
 import numpy as np
 from yaml import safe_load
 
-from barker_detection import BarkerDetector
 from correlation import analyze_signal, build_reference_signal
 from datagram import Datagram, msgType
 from filter import RRCFilter
+from gold_detection import GoldCodeDetector
 from modulation import ModulationProtocol
 from synchronize import Synchronizer
 
@@ -35,9 +35,9 @@ def load_config(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as handle:
         config = safe_load(handle)
 
-    barker_cfg = config.setdefault("barker_sequence", {})
-    if "correlation_scale_factor_threshold" not in barker_cfg:
-        barker_cfg["correlation_scale_factor_threshold"] = barker_cfg.get("correlation_threshold", 0.0)
+    gold_cfg = config.setdefault("gold_sequence", {})
+    if "correlation_scale_factor_threshold" not in gold_cfg:
+        gold_cfg["correlation_scale_factor_threshold"] = gold_cfg.get("correlation_threshold", 0.0)
     return config
 
 
@@ -174,12 +174,12 @@ def normalized_symbol_correlation(reference: np.ndarray, received: np.ndarray) -
     return np.abs(raw) / denom
 
 
-def detect_barker_start(
+def detect_gold_start(
     received_symbols: np.ndarray,
-    detector: BarkerDetector,
+    detector: GoldCodeDetector,
     threshold: float,
 ) -> tuple[int | None, float]:
-    scores = normalized_symbol_correlation(detector.barker_symbols, received_symbols)
+    scores = normalized_symbol_correlation(detector.gold_symbols, received_symbols)
     if scores.size == 0:
         return None, 0.0
 
@@ -287,38 +287,38 @@ def run_modem_case(
     }
 
 
-def run_barker_case(
+def run_gold_case(
     case: SimulationCase,
     datagram: Datagram,
     modem: ModulationProtocol,
-    detector: BarkerDetector,
+    detector: GoldCodeDetector,
     rng: np.random.Generator,
 ) -> dict:
     payload_symbols = modem.modulate_message(datagram).astype(np.complex64)
-    tx = detector.add_barker_symbols(payload_symbols)
+    tx = detector.add_gold_symbols(payload_symbols)
     rx = add_awgn(tx, case.noise_std, rng)
 
-    start_index, peak = detect_barker_start(
+    start_index, peak = detect_gold_start(
         nearest_constellation_symbols(rx, modem.modulation_type),
         detector,
         threshold=detector.correlation_scale_factor_threshold,
     )
     remove_ok = False
     if start_index is not None:
-        recovered = detector.remove_barker_symbols(rx, start_index)
+        recovered = detector.remove_gold_symbols(rx, start_index)
         trimmed = recovered[: payload_symbols.size]
         decisions = nearest_constellation_symbols(trimmed, modem.modulation_type)
         remove_ok = bool(np.array_equal(decisions, payload_symbols))
 
     return {
-        "stage": "barker",
+        "stage": "gold",
         "case": case.name,
         "noise_std": case.noise_std,
         "detected": start_index is not None,
         "detected_index": start_index,
         "peak": peak,
         "remove_ok": remove_ok,
-        "sequence_length": int(len(detector.barker_symbols)),
+        "sequence_length": int(len(detector.gold_symbols)),
     }
 
 
@@ -362,14 +362,14 @@ def run_full_case(
     case: SimulationCase,
     datagram: Datagram,
     modem: ModulationProtocol,
-    detector: BarkerDetector,
+    detector: GoldCodeDetector,
     rrc_filter: RRCFilter,
     synchronizer: Synchronizer,
     rng: np.random.Generator,
     args: argparse.Namespace,
 ) -> dict:
     tx_symbols = modem.modulate_message(datagram).astype(np.complex64)
-    framed_symbols = detector.add_barker_symbols(tx_symbols)
+    framed_symbols = detector.add_gold_symbols(tx_symbols)
     tx_signal, _ = shape_symbol_stream(
         framed_symbols,
         modem,
@@ -379,7 +379,7 @@ def run_full_case(
     synced = run_sync_pipeline(tx_signal, synchronizer, rrc_filter, rng, case, args)
     decided = nearest_constellation_symbols(synced, modem.modulation_type)
 
-    start_index, peak = detect_barker_start(
+    start_index, peak = detect_gold_start(
         decided,
         detector,
         threshold=detector.correlation_scale_factor_threshold,
@@ -389,7 +389,7 @@ def run_full_case(
     compat_ok = False
     compat_error = ""
     if start_index is not None:
-        payload_rx = detector.remove_barker_symbols(decided, start_index)
+        payload_rx = detector.remove_gold_symbols(decided, start_index)
         payload_rx = payload_rx[: tx_symbols.size]
         try:
             recovered = recover_datagram_from_symbols(payload_rx, modem)
@@ -450,7 +450,7 @@ def run_correlation_case(
         "offset_error": offset_error,
         "normalized_peak": result.normalized_peak,
         "phase_deg": result.peak_phase_deg,
-        "barker_peak": result.barker_peak,
+        "gold_peak": result.gold_peak,
         "pass": (
             abs(offset_error) <= args.correlation_offset_tolerance
             and result.normalized_peak >= args.correlation_peak_threshold
@@ -472,7 +472,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Simulate coherence between local SDR modules.")
     parser.add_argument(
         "--stage",
-        choices=["modem", "barker", "sync", "full", "correlation", "all"],
+        choices=["modem", "gold", "sync", "full", "correlation", "all"],
         default="all",
         help="Which part of the pipeline to test.",
     )
@@ -525,7 +525,7 @@ def main() -> int:
     config = load_config(args.config)
 
     modem = ModulationProtocol(config)
-    detector = BarkerDetector(config)
+    detector = GoldCodeDetector(config)
     rrc_filter = RRCFilter(config)
     synchronizer = Synchronizer(config)
     datagram = make_datagram(args.message)
@@ -533,14 +533,14 @@ def main() -> int:
     rng = np.random.default_rng(args.seed)
 
     results: list[dict] = []
-    selected_stages = ["modem", "barker", "sync", "full", "correlation"] if args.stage == "all" else [args.stage]
+    selected_stages = ["modem", "gold", "sync", "full", "correlation"] if args.stage == "all" else [args.stage]
 
     for case in cases:
         for stage in selected_stages:
             if stage == "modem":
                 results.append(run_modem_case(case, datagram, modem, rng))
-            elif stage == "barker":
-                results.append(run_barker_case(case, datagram, modem, detector, rng))
+            elif stage == "gold":
+                results.append(run_gold_case(case, datagram, modem, detector, rng))
             elif stage == "sync":
                 results.append(run_sync_case(case, modem, rrc_filter, synchronizer, rng, args))
             elif stage == "full":

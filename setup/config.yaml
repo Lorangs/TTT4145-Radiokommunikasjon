@@ -43,14 +43,10 @@ filter:
   butterworth_order: 4                # Rolloff order 
   butterworth_cutoff_hz: 140e9        # Cutoff Freq. Adjust as needed 
 
-barker_sequence:
-  code_length: 13                     # Preamble length in bits. True Barker codes exist up to 13; 14-70 use deterministic Barker-like PN sequences.
-  correlation_threshold: 0.033          # Correlation threshold for preamble detection. Scale factor to acknowledge signal peaks above the noise floor. Adjust based on observed noise levels and signal strength.
-
 gold_sequence:
-  code_length: 31
-  code_index: 7
-  correlation_threshold: 0.7
+  code_length: 31                    # Supported lengths follow the implemented Gold-code families.
+  code_index: 7                      # Selects one code from the family for this link.
+  correlation_threshold: 0.7         # Detection threshold for symbol-domain Gold correlation.
 
 
 synchronization:

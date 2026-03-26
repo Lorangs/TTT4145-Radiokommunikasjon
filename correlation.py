@@ -2,9 +2,9 @@
 Analyze correlation between a transmitted text-message burst and one or more received IQ captures.
 
 Technique:
-    1. Build the exact transmit reference burst from the local modulation, Barker, and RRC modules.
+    1. Build the exact transmit reference burst from the local modulation, Gold-code framing, and RRC modules.
     2. Compute normalized complex cross-correlation between the reference burst and each received signal.
-    3. Report peak correlation, timing offset, phase offset, and a Barker-only correlation score.
+    3. Report peak correlation, timing offset, phase offset, and a Gold-only correlation score.
 
 This is appropriate for short framed text-message traffic between two or more radios because the
 transmitted burst is known and finite, while normalized cross-correlation remains comparable across
@@ -26,9 +26,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 from yaml import safe_load
 
-from barker_detection import BarkerDetector
 from datagram import Datagram, msgType
 from filter import RRCFilter
+from gold_detection import GoldCodeDetector
 from modulation import ModulationProtocol
 
 
@@ -41,17 +41,17 @@ class CorrelationResult:
     peak_phase_rad: float
     peak_phase_deg: float
     energy_ratio_db: float
-    barker_peak: float
-    barker_index: int
+    gold_peak: float
+    gold_index: int
 
 
 def load_config(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as handle:
         config = safe_load(handle)
 
-    barker_cfg = config.setdefault("barker_sequence", {})
-    if "correlation_scale_factor_threshold" not in barker_cfg:
-        barker_cfg["correlation_scale_factor_threshold"] = barker_cfg.get("correlation_threshold", 0.0)
+    gold_cfg = config.setdefault("gold_sequence", {})
+    if "correlation_scale_factor_threshold" not in gold_cfg:
+        gold_cfg["correlation_scale_factor_threshold"] = gold_cfg.get("correlation_threshold", 0.0)
     return config
 
 
@@ -62,12 +62,12 @@ def make_datagram(message: str, msg_id: int) -> Datagram:
 
 def build_reference_signal(config: dict, message: str, msg_id: int) -> np.ndarray:
     modem = ModulationProtocol(config)
-    detector = BarkerDetector(config)
+    detector = GoldCodeDetector(config)
     rrc_filter = RRCFilter(config)
     datagram = make_datagram(message, msg_id)
 
     modulated = modem.modulate_message(datagram)
-    framed = detector.add_barker_symbols(modulated)
+    framed = detector.add_gold_symbols(modulated)
     upsampled = modem.upsample_symbols(framed)
     return rrc_filter.apply_filter(upsampled).astype(np.complex64)
 
@@ -109,18 +109,18 @@ def normalized_cross_correlation(reference: np.ndarray, received: np.ndarray) ->
     return normalized, correlation
 
 
-def barker_correlation(config: dict, received: np.ndarray) -> tuple[float, int]:
-    detector = BarkerDetector(config)
+def gold_correlation(config: dict, received: np.ndarray) -> tuple[float, int]:
+    detector = GoldCodeDetector(config)
     modem = ModulationProtocol(config)
     rrc_filter = RRCFilter(config)
 
-    barker_upsampled = modem.upsample_symbols(detector.barker_symbols.astype(np.complex64))
-    barker_reference = rrc_filter.apply_filter(barker_upsampled).astype(np.complex64)
+    gold_upsampled = modem.upsample_symbols(detector.gold_symbols.astype(np.complex64))
+    gold_reference = rrc_filter.apply_filter(gold_upsampled).astype(np.complex64)
 
-    if received.size < barker_reference.size:
-        raise ValueError("Received signal is shorter than the Barker reference.")
+    if received.size < gold_reference.size:
+        raise ValueError("Received signal is shorter than the Gold reference.")
 
-    normalized, _ = normalized_cross_correlation(barker_reference, received)
+    normalized, _ = normalized_cross_correlation(gold_reference, received)
     peak_index = int(np.argmax(np.abs(normalized)))
     peak_value = float(np.abs(normalized[peak_index]))
     return peak_value, peak_index
@@ -144,7 +144,7 @@ def analyze_signal(
     rx_rms = np.sqrt(np.mean(np.abs(aligned) ** 2))
     energy_ratio_db = 20 * np.log10(max(rx_rms, 1e-12) / max(ref_rms, 1e-12))
 
-    barker_peak, barker_index = barker_correlation(config, received)
+    gold_peak, gold_index = gold_correlation(config, received)
 
     result = CorrelationResult(
         rx_path=label,
@@ -154,8 +154,8 @@ def analyze_signal(
         peak_phase_rad=peak_phase,
         peak_phase_deg=np.degrees(peak_phase),
         energy_ratio_db=float(energy_ratio_db),
-        barker_peak=barker_peak,
-        barker_index=barker_index,
+        gold_peak=gold_peak,
+        gold_index=gold_index,
     )
     return result, normalized
 
@@ -214,7 +214,7 @@ def plot_correlation(
 
     fig.suptitle(
         f"peak={result.normalized_peak:.4f}, phase={result.peak_phase_deg:.2f} deg, "
-        f"barker={result.barker_peak:.4f}",
+        f"gold={result.gold_peak:.4f}",
         fontsize=11,
     )
     plt.tight_layout()
@@ -228,8 +228,8 @@ def print_result(result: CorrelationResult) -> None:
         f"offset_s={result.time_offset_s:.9f} "
         f"phase_deg={result.peak_phase_deg:.2f} "
         f"energy_ratio_db={result.energy_ratio_db:.2f} "
-        f"barker_peak={result.barker_peak:.6f} "
-        f"barker_index={result.barker_index}"
+        f"gold_peak={result.gold_peak:.6f} "
+        f"gold_index={result.gold_index}"
     )
 
 

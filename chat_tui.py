@@ -73,7 +73,8 @@ class ChatTUI:
 
 if __name__ == "__main__":
     # Example usage of ChatTUI
-    chat_ui = ChatTUI()
+    config = {"radio": {"queue_size": 32}}
+    chat_ui = ChatTUI(config)
 
     import numpy as np
 
@@ -82,12 +83,12 @@ if __name__ == "__main__":
     # Simulate sending messages
     for i in range(5):
         payload = f"Hello, this is message {i}"
-        datagram = Datagram.from_string(payload)
+        datagram = Datagram.as_string(payload)
         msgID.append(datagram.get_msg_id)  # Store message ID for later reference
         chat_ui.add_message(datagram)
         chat_ui.render_screen()
 
 
-    ack_datagram = Datagram.from_ack(msg_id=msgID[2])  # Create ACK for the third message
+    ack_datagram = Datagram.as_ack(msg_id=msgID[2])  # Create ACK for the third message
     chat_ui.add_message(ack_datagram)
     chat_ui.render_screen()

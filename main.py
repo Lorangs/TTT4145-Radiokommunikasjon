@@ -3,7 +3,7 @@ To display logging file in a terminal with color coding, use the following comma
 tail -f log/$(date +%Y-%m-%d)-debug.log
 
 optionally pipe with grep:
-| grep --color=always "ERROR\|WARNING\|INFO\|DEBUG"
+| grep --color=always "ERROR\\|WARNING\\|INFO\\|DEBUG"
 
 to filter for specific log levels while keeping color coding.
 
@@ -32,7 +32,7 @@ from modulation import ModulationProtocol
 from datagram import Datagram, msgType
 from sdr_transciever import SDRTransciever
 from filter import RRCFilter
-from barker_detection import BarkerDetector
+from gold_detection import GoldCodeDetector
 from synchronize import Synchronizer
 
 
@@ -66,7 +66,7 @@ class SDRChatApp:
         self.modulation_protocol = ModulationProtocol(config)
         self.matched_filter = RRCFilter(config)
         self.tui = ChatTUI(config)
-        self.barker_detector = BarkerDetector(config)
+        self.gold_detector = GoldCodeDetector(config)
         self.synchronizer = Synchronizer(config)
         self.sdr = SDRTransciever(config) # must be initilized after Matched Filter module.
 
@@ -100,7 +100,7 @@ class SDRChatApp:
         self.qapp = None
         self.plotter = None
         self.plot_data_queue: Queue[np.ndarray] = Queue(maxsize=32)
-        self.static_plotter= StaticSDRPlotter()  # For static plots of filter response, constellation, etc.
+        self.static_plotter = StaticSDRPlotter() if self.debug_mode else None
         self.static_plot_queue: Queue[Dict[str, np.ndarray]] = Queue(maxsize=8)  # Queue for static plot data (e.g., filter response, constellation points)
 
         if self.debug_mode:
@@ -120,7 +120,7 @@ class SDRChatApp:
     def start(self):
         """Start the SDR Chat Application."""
         if self.sdr.connect():  
-            self.synchronizer.read_noise_floor(self.sdr.measure_noise_floor_dB())
+            self.synchronizer.set_noise_floor(self.sdr.measure_noise_floor_dB())
         else:
             logging.debug("Failed to connect to SDR.")
             return False
@@ -258,11 +258,14 @@ class SDRChatApp:
                 received_signal = self.sdr.sdr.rx()
 
                 coarse_freq_adjusted = self.synchronizer.coarse_frequenzy_synchronization(received_signal)
+                if coarse_freq_adjusted is None:
+                    continue
+
                 filtered_signal = self.matched_filter.apply_filter(coarse_freq_adjusted)
-                time_adjusted = self.synchronizer.time_synchronization(filtered_signal)
+                time_adjusted = self.synchronizer.gardner_timing_synchronization(filtered_signal)
                 fine_freq_adjusted = self.synchronizer.fine_frequenzy_synchronization(time_adjusted)
 
-                barker_index = self.synchronizer.barker_code_detection(fine_freq_adjusted)
+                gold_index = self.gold_detector.detect(fine_freq_adjusted)
 
                 # === Send data to plotter if debug mode is enabled ===
                 if self.debug_mode and self.plotter is not None:
@@ -273,10 +276,13 @@ class SDRChatApp:
                         pass  # Drop frame if plotter can't keep up
                 # ================================================================
 
-                if barker_index is not None:
+                if gold_index is not None:
                     try:
-                        recieved_signal = self.barker_detector.remove_barker_symbols(received_signal, barker_index)
-                        received_message = self.modulation_protocol.demodulate_message(recieved_signal)
+                        received_symbols = self.gold_detector.remove_gold_symbols(
+                            fine_freq_adjusted,
+                            gold_index,
+                        )
+                        received_message = self.modulation_protocol.demodulate_message(received_symbols)
                     except ValueError as e:
                         logging.warning(f"Message demodulation failed: {e}")
                         continue
@@ -287,7 +293,7 @@ class SDRChatApp:
                     self.rx_queue.put(received_message)
                     self.tui_refresh_event.set()  # Signal TUI to refresh display
 
-                    if received_message.msg_type == msgType.DATA:
+                    if received_message.get_msg_type == msgType.DATA:
                         logging.info(f"Received datagram: {received_message}")
                         self.queue_ack(received_message.get_msg_id)
                         self.chat_history_log(f"Received: [ID:{received_message.get_msg_id}]\t{received_message.get_payload.tobytes().decode('utf-8', errors='replace')}")
@@ -310,8 +316,8 @@ class SDRChatApp:
             try:
                 datagram: Datagram = self.tx_queue.get(timeout=0.1)  # Wait for message to send
                 modulated_signal = self.modulation_protocol.modulate_message(datagram)
-                signal_with_barker = self.barker_detector.add_barker_symbols(modulated_signal)
-                upsampled_signal = self.modulation_protocol.upsample_symbols(signal_with_barker)
+                signal_with_gold = self.gold_detector.add_gold_symbols(modulated_signal)
+                upsampled_signal = self.modulation_protocol.upsample_symbols(signal_with_gold)
 
                 if self.matched_filter.hardware_filter_enable:
                     filtered_signal = upsampled_signal  # Assume hardware filtering is applied by the SDR TODO: Not working as inteded

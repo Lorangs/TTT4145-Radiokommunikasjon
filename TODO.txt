@@ -6,7 +6,7 @@
 
 Pad datagram to fixed size, zero pad after payload (?)  
 Fix pilot header 
-Add interleaving? 
+
 Fix synchronization
 
 
@@ -14,7 +14,7 @@ Fix synchronization
 # 0. Critical
 -- Fix stale config and active test-path issues:
    `setup/config.yaml` currently sets `butterworth_cutoff_hz: 140e9`, which is invalid for the configured sample rate
-   make the active scripts use one consistent Barker threshold key
+   make the active scripts use one consistent Gold threshold key
 -- Decide whether the Butterworth front-end filter should be part of the real RX path and wire it consistently if yes
 -- Keep the active validation path healthy:
    `simulate.py`, `correlation.py`, and `simple_tester.py` should stay aligned and usable while `main.py` is inactive
@@ -24,17 +24,14 @@ Fix synchronization
    datagram packing / unpacking and CRC failures
    scrambler symmetry
    modulation / demodulation round-trips
-   Barker detection / removal
+   Gold detection / removal
    synchronization stages
 -- Implement real ACK tracking with timeout / retransmission logic; the repo currently creates and sends ACKs but does not retry lost packets
--- Fix stale helper examples and script entry points so they match the current APIs:
-   `chat_tui.py` still uses non-existent `Datagram.from_string()` / `Datagram.from_ack()`
-   `barker_detection.py` demo still calls non-existent `detect()`
+-- Fix stale helper examples and script entry points so they match the current APIs
 -- Fix `Datagram.as_string()` and `Datagram.as_bytes()` so they honor a caller-provided `msg_id`
 -- Improve logging and error handling around SDR connection failures, synchronization failures, and demodulation / CRC failures in the active scripts
 -- If `main.py` is brought back into use later:
-   repair the RX path to use `Synchronizer.set_noise_floor()`, Gardner timing, and a real Barker detection step
-   demodulate synchronized / Barker-stripped symbols rather than raw RX samples
+   validate the RX path with Gardner timing and Gold detection on synchronized symbols
    fix cleanup to read `filter.hardware_filter_file` instead of `radio.hardware_filter_file`
 
 # 2. Nice to have

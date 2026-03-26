@@ -1,7 +1,7 @@
 import numpy as np
 from scipy import signal
 from numba import njit
-from barker_code import BARKER_SYMBOLS
+from gold_code import get_gold_code_symbols
 
 from matplotlib import pyplot as plt
 from filter import RRCFilter
@@ -118,7 +118,12 @@ class Synchronizer:
         filter = RRCFilter(config)
         rc_filter = filter.rc_coefficients
 
-        preamble_sequence = BARKER_SYMBOLS[self.modulation_scheme][int(config['barker_sequence']['code_length'])]  
+        gold_cfg = config["gold_sequence"]
+        preamble_sequence = get_gold_code_symbols(
+            modulation_type=self.modulation_scheme,
+            code_length=int(gold_cfg["code_length"]),
+            code_index=int(gold_cfg.get("code_index", 0)),
+        )
         preamble_sequence_upsampled = np.zeros(len(preamble_sequence) * self.sps, dtype=np.complex64)
         preamble_sequence_upsampled[::self.sps] = preamble_sequence  
         preamble_sequence = signal.convolve(preamble_sequence_upsampled, rc_filter, mode='same', method='fft')  # Apply pulse shaping to the preamble sequence
@@ -183,7 +188,7 @@ class Synchronizer:
 
         plt.figure(figsize=(10, 4))
         plt.stem(abs_correlation)
-        plt.title("Correlation with Barker Code Preamble")
+        plt.title("Correlation with Gold Code Preamble")
         plt.xlabel("Sample Index")
         plt.ylabel("Absolute Correlation")
         plt.grid()

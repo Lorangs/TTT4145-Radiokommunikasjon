@@ -5,7 +5,6 @@ This module defines the Datagram class, which represents a structured message fo
 
 import numpy as np
 from dataclasses import dataclass
-from barker_code import BARKER_BITS
 from enum import Enum
 
 class msgType(Enum):
@@ -16,12 +15,13 @@ class msgType(Enum):
 class Datagram():
     """ 
     Messaage format:
-        - barker_code: 2 bytes (13-bit Barker code as preamble, padded to 16 bits)
         - msg_type: 1 byte string (DATA or ACK)
         - msg_id: 1 byte np.uint8 (message ID for tracking)
         - size_payload: 1 byte np.uint8 (length of payload in bytes) (0 - 255)
         - payload: variable length np.uint8 array
         - crc16: 2 bytes (CRC16 checksum of header + payload)
+
+    The external framing layer adds the Gold sync sequence before modulation.
     """
     _msg_id: np.uint8
     _msg_type: msgType
