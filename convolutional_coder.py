@@ -107,6 +107,8 @@ def _encode(
 
     return output_bits
 
+
+
 @numba.njit(fastmath=True, cache=True)
 def _viterbi_decode_hard(
         received_bits: np.ndarray,
@@ -114,7 +116,17 @@ def _viterbi_decode_hard(
         k: int,
         n: int,
         ramp_down: bool = True) -> np.ndarray:
-    """Decode received bits using the Viterbi algorithm with hard decision."""
+    """Decode received bits using the Viterbi algorithm with hard decision.
+    Args:
+        received_bits: 1D array of received bits (length must be multiple of n)
+        G: Generator matrix used for encoding
+        k: Constraint length of the code
+        n: Number of output bits per input bit
+        ramp_down: If True, assumes encoder was ramped down with tail bits, so final state is zero.
+    Returns:
+        Decoded input bits as a 1D array.
+
+    """
     if received_bits.size % n != 0:
         raise ValueError("Received bits length must be a multiple of n.")
 
