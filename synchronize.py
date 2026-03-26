@@ -7,13 +7,6 @@ from matplotlib import pyplot as plt
 from filter import RRCFilter
 
 @njit(cache=True, fastmath=True)
-def interp_linear(x, i) -> np.complex64:
-    i0 = int(np.floor(i))
-    frac = i - i0
-    return x[i0]*(1-frac) + x[i0+1]*frac
-
-
-@njit(cache=True, fastmath=True)
 def _gardner_njit(samples: np.ndarray, sps: int = 8, Kp: float = 0.01, Ki: float = 0.0001) -> tuple[np.ndarray, np.ndarray]:
     mu = 0.0
     omega = 1.0
@@ -23,9 +16,13 @@ def _gardner_njit(samples: np.ndarray, sps: int = 8, Kp: float = 0.01, Ki: float
 
     j = 0
     while i < len(samples) - sps:
-        mid = interp_linear(samples, i + mu)
-        early = interp_linear(samples, i + mu - sps//2)
-        late = interp_linear(samples, i + mu + sps//2)
+
+        # Linear interpolation to get the mid, early, and late samples
+        i0 = int(np.floor(i))
+        fraction = i - i0
+        mid = samples[i0] * (1 - fraction) + samples[i0 + 1] * fraction
+        early = samples[i0 - sps//2] * (1 - fraction) + samples[i0 - sps//2 + 1] * fraction
+        late = samples[i0 + sps//2] * (1 - fraction) + samples[i0 + sps//2 + 1] * fraction
 
         error = np.real((late - early) * np.conj(mid)) # ca |mid|² 
 
@@ -41,9 +38,6 @@ def _gardner_njit(samples: np.ndarray, sps: int = 8, Kp: float = 0.01, Ki: float
 
         j += 1
     return out, errors
-
-
-
 
 
 @njit(cache=True, fastmath=True)

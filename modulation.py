@@ -31,13 +31,13 @@ if __name__ == "__main__":
 
     modulation_config = {
         'modulation': {
-            'type': 'PSK',
-            'order': 8      # QPSK modulation
+            'type': 'QAM',
+            'order': 16      # 4-QAM modulation
         }
     }
+    
     protocol = ModulationProtocol(modulation_config)
-
-    test_bits = np.random.randint(0, 2, 99)  # Generate a random bit stream of length 100
+    test_bits = np.random.randint(0, 2, 256)  # Generate a random bit stream of length 100
     modulated_signal = protocol.modulate_message(test_bits)
     print("Modulated signal:")
     print(modulated_signal)

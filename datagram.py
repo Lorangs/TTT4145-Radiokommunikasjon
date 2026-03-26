@@ -1,11 +1,10 @@
 """
 This module defines the Datagram class, which represents a structured message format for communication.
 """
-
-
 import numpy as np
 from dataclasses import dataclass
 from enum import Enum
+from time import time
 
 class msgType(Enum):
     DATA = 0
@@ -18,15 +17,18 @@ class Datagram():
         - msg_type: 1 byte string (DATA or ACK)
         - msg_id: 1 byte np.uint8 (message ID for tracking)
         - payload: up to 254 bytes (actual message data). The payload is padded with whitespace if it is shorter than 254 bytes.
+        - timestamp: 4 bytes np.uint32 (UNIX timestamp in seconds when the datagram was created)
     """
     _msg_id: np.uint8
     _msg_type: msgType
+    _timestamp: np.uint32
     _payload: np.ndarray
 
     def __init__(self, 
                  msg_id: np.uint8 | None = None,
                  msg_type: msgType = msgType.DATA, 
-                 payload: np.ndarray = np.array([], dtype=np.uint8), 
+                 timestamp: np.uint32 | None = None,
+                 payload: np.ndarray = np.array([], dtype=np.uint8),
             ):
         """Initialize datagram with payload and message type. Automatically computes CRC16 checksum.
             Args:
@@ -34,19 +36,25 @@ class Datagram():
                 payload (np.ndarray): Payload data as a numpy array of uint8. If None, it will be treated as an empty payload.
         """
 
-        if len(payload) > 254:
+        if len(payload) > 250:
             raise ValueError("Payload size exceeds maximum of 254 bytes.")
         
         if payload.dtype != np.uint8:
             raise ValueError("Payload must be a numpy array of uint8.")
         
-        if len(payload) < 254:
+        if len(payload) < 250:
             # Pad payload with whitespace (ASCII 0x20) to ensure fixed size of 254 bytes
-            padding_length = 254 - len(payload)
+            padding_length = 250 - len(payload)
             payload = np.concatenate((payload, np.full(padding_length, 0x20, dtype=np.uint8)))
         
         self._msg_id = msg_id if msg_id is not None else np.random.randint(0, 256, dtype=np.uint8)
         self._msg_type = msg_type        
+
+        if timestamp is not None:
+            self._timestamp = timestamp
+        else:
+            self._timestamp = np.uint32(time())
+        
         self._payload = payload
 
 
@@ -100,6 +108,7 @@ class Datagram():
         return (
             bytes([self._msg_id]) +
             bytes([self._msg_type.value]) +
+            self._timestamp.tobytes() +
             bytes(self._payload)
         )
 
@@ -115,14 +124,15 @@ class Datagram():
         """
 
         if len(data) != 256:
-            raise ValueError("Data length must be exactly 256 bytes (1+1+254).")
+            raise ValueError("Data length must be exactly 256 bytes (1+1+4+250).")
 
         msg_id = np.uint8(data[0])
         msg_type = msgType(data[1])
-        payload = np.frombuffer(data[2:], dtype=np.uint8).copy()
+        timestamp_bytes = np.frombuffer(data[2:6], dtype=np.uint32)[0]
+        payload = np.frombuffer(data[6:], dtype=np.uint8).copy()    
 
         # Route through __init__ so validation/padding rules stay centralized
-        return cls(msg_id=msg_id, msg_type=msg_type, payload=payload)
+        return cls(msg_id=msg_id, msg_type=msg_type, timestamp=timestamp_bytes, payload=payload)
 
     @property
     def get_payload(self) ->  np.ndarray:
@@ -139,9 +149,15 @@ class Datagram():
         """Get message type."""
         return self._msg_type
     
+    @property
+    def get_timestamp(self) -> np.uint32:
+        """Get the timestamp of when the datagram was created."""
+        return self._timestamp
+    
     def __repr__(self) -> str:
         return (f"\n\tmsg_ID:\t\t{self._msg_id},\n"
                 f"\tmsg_type:\t{self._msg_type.name},\n"
+                f"\ttimestamp:\t{self._timestamp},\n"
                 f"\tpayload:\n{self._payload}\n")
 
 

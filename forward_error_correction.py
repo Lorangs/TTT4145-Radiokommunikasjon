@@ -1,9 +1,9 @@
 """
 implementation of reed-solomon codes and convolutional codes for forward error correction (FEC)
+
 For 32 ECC symbols, the algorithm can correct up to 128 byte errors in the original message.
 For 16 ECC symbols. The algorithm adds 64 bytes of redundancy to the original message.
 For 8 ECC symbols, it adds 32 bytes of redundancy
-
 """
 
 from reedsolo import RSCodec, ReedSolomonError
@@ -26,7 +26,6 @@ class FCCodec:
         except ReedSolomonError as e:
             print(f"Reed-Solomon decoding failed: {e}")
             return None
-
 
 
 
