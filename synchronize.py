@@ -2,18 +2,50 @@ import numpy as np
 from scipy import signal
 from numba import njit
 from gold_code import get_gold_code_symbols
-
-from matplotlib import pyplot as plt
 from filter import RRCFilter
 
-@njit(cache=True, fastmath=True)
+def _interp_linear_py(x, i) -> np.complex64:
+    i0 = int(np.floor(i))
+    frac = i - i0
+    return x[i0] * (1 - frac) + x[i0 + 1] * frac
+
+
+@njit(cache=False, fastmath=True)
 def interp_linear(x, i) -> np.complex64:
     i0 = int(np.floor(i))
     frac = i - i0
     return x[i0]*(1-frac) + x[i0+1]*frac
 
 
-@njit(cache=True, fastmath=True)
+def _gardner_py(samples: np.ndarray, sps: int = 8, Kp: float = 0.01, Ki: float = 0.0001) -> tuple[np.ndarray, np.ndarray]:
+    mu = 0.0
+    omega = 1.0
+    i = sps
+    out = np.zeros(len(samples) // sps + 10, dtype=np.complex64)
+    errors = np.zeros(len(samples) // sps + 10, dtype=np.float32)
+
+    j = 0
+    while i < len(samples) - sps:
+        mid = _interp_linear_py(samples, i + mu)
+        early = _interp_linear_py(samples, i + mu - sps // 2)
+        late = _interp_linear_py(samples, i + mu + sps // 2)
+
+        error = np.real((late - early) * np.conj(mid))
+
+        omega += Ki * error
+        mu += omega + Kp * error
+
+        step = int(np.floor(mu))
+        mu -= step
+        i += step
+
+        out[j] = mid
+        errors[j] = error
+        j += 1
+    return out, errors
+
+
+@njit(cache=False, fastmath=True)
 def _gardner_njit(samples: np.ndarray, sps: int = 8, Kp: float = 0.01, Ki: float = 0.0001) -> tuple[np.ndarray, np.ndarray]:
     mu = 0.0
     omega = 1.0
@@ -46,7 +78,33 @@ def _gardner_njit(samples: np.ndarray, sps: int = 8, Kp: float = 0.01, Ki: float
 
 
 
-@njit(cache=True, fastmath=True)
+def _costas_loop_py(received_signal: np.ndarray, Kp: float, Ki: float, modulation_order: int) -> np.ndarray:
+    loop_integral = 0.0
+    vco_phase = 0.0
+    out = np.zeros_like(received_signal, dtype=np.complex64)
+
+    N = len(received_signal)
+    for i in range(N):
+        sample = received_signal[i] * np.exp(-1j * vco_phase)
+
+        I = np.real(sample)
+        Q = np.imag(sample)
+
+        if modulation_order == 2:
+            error = np.sign(I) * Q
+            loop_integral += Ki * error
+            vco_phase = Kp * error + loop_integral
+            out[i] = I
+        else:
+            error = np.sign(I) * Q - np.sign(Q) * I
+            loop_integral += Ki * error
+            vco_phase = Kp * error + loop_integral
+            out[i] = sample
+
+    return out
+
+
+@njit(cache=False, fastmath=True)
 def _costas_loop_njit(received_signal: np.ndarray,
                       Kp: float,
                       Ki:float,
@@ -89,12 +147,13 @@ def _costas_loop_njit(received_signal: np.ndarray,
 
 
 class Synchronizer:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, warmup: bool = True, use_numba: bool = True):
         self.modulation_scheme = config['modulation']['type'].upper().strip()
         self.sps = int(config['modulation']['samples_per_symbol'])
         self.buffer_size = int(config['receiver']['buffer_size'])
         self.sample_rate = self.sps * int(float(config['modulation']['symbol_rate']))
         self.nfft = int(config['synchronization']['nfft'])
+        self.use_numba = bool(use_numba)
 
         self.signal_power_threshold_dB = float(config['synchronization']['signal_power_threshold_dB'])
         self.noise_floor_dB = 0.0 # linear scale, to be set after SDR connection
@@ -138,9 +197,20 @@ class Synchronizer:
         else:
             raise ValueError(f"Unsupported modulation scheme: {self.modulation_scheme}")
         
-        # compile the Numba-optimized functions with the specified parameters
-        _costas_loop_njit(np.zeros(self.buffer_size, dtype=np.complex64), self.costas_Kp, self.costas_Ki, self.modulation_order)
-        _gardner_njit(np.zeros(self.buffer_size, dtype=np.complex64), self.sps, self.gardner_Kp, self.gardner_Ki)
+        if warmup and self.use_numba:
+            # Compile the Numba-optimized functions before the first real call.
+            _costas_loop_njit(
+                np.zeros(self.buffer_size, dtype=np.complex64),
+                self.costas_Kp,
+                self.costas_Ki,
+                self.modulation_order,
+            )
+            _gardner_njit(
+                np.zeros(self.buffer_size, dtype=np.complex64),
+                self.sps,
+                self.gardner_Kp,
+                self.gardner_Ki,
+            )
 
     def set_noise_floor(self, level_dB: float):
         """Set the noise floor in dB for adaptive thresholding."""
@@ -163,22 +233,27 @@ class Synchronizer:
         if signal_power_dB < self.noise_floor_dB + self.signal_power_threshold_dB:
             return None
 
-        time_vector = np.arange(self.buffer_size) / self.sample_rate
+        time_vector = np.arange(len(received_signal)) / self.sample_rate
         
         return received_signal * np.exp(-1j * 2 * np.pi * estimated_frequenzy_offset * time_vector)
 
     
     def fine_frequenzy_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
         """Fine frequency synchronization using a costas loop."""
+        if not self.use_numba:
+            return _costas_loop_py(received_signal, self.costas_Kp, self.costas_Ki, self.modulation_order)
         return _costas_loop_njit(received_signal, self.costas_Kp, self.costas_Ki, self.modulation_order)
 
 
     def gardner_timing_synchronization(self, samples: np.ndarray) -> np.ndarray:
+        if not self.use_numba:
+            return _gardner_py(samples, self.sps, self.gardner_Kp, self.gardner_Ki)[0]
         return _gardner_njit(samples, self.sps, self.gardner_Kp, self.gardner_Ki)[0]
     
 
     def time_synchronization(self, samples: np.ndarray) -> int:
         """ ML timing synchronization algorithm. Searches for the known pattern in the received signal and estimates the timing offset."""
+        from matplotlib import pyplot as plt
 
         correlation = signal.convolve(samples, self.preamble_sequence, mode='full', method='fft')
 

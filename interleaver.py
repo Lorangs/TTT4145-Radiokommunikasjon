@@ -1,25 +1,47 @@
 """
-Wrapper class for interleaving and deinterleaving bits using a random interleaver from the commpy library.
+Dynamic-length bit interleaver.
+
+The permutation is derived from:
+    - a fixed seed from config
+    - the actual bitstream length at runtime
+
+This lets TX and RX independently rebuild the same permutation for each frame
+without relying on a single global interleaver length.
 """
 
-from commpy.channelcoding import RandInterlv
 import numpy as np
-
 
 
 class Interleaver:
     def __init__(self, config: dict):
-        seed = int(config['coding']['interleaver_seed'])
-        length = int(config['coding']['interleaver_length'])
-        self.interleaver = RandInterlv(length, seed)
+        self.seed = int(config["coding"]["interleaver_seed"])
+        self._cache: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+
+    def _permutations(self, length: int) -> tuple[np.ndarray, np.ndarray]:
+        if length <= 0:
+            raise ValueError("Interleaver length must be positive.")
+
+        cached = self._cache.get(length)
+        if cached is not None:
+            return cached
+
+        rng = np.random.default_rng(self.seed)
+        permutation = rng.permutation(length)
+        inverse = np.empty(length, dtype=np.int64)
+        inverse[permutation] = np.arange(length, dtype=np.int64)
+
+        self._cache[length] = (permutation, inverse)
+        return permutation, inverse
 
     def interleave(self, encoded_bits: np.ndarray) -> np.ndarray:
-        """Interleave the encoded bits using the random interleaver."""
-        return self.interleaver.interlv(encoded_bits)
-    
+        """Interleave bits using a permutation derived from the input length."""
+        permutation, _ = self._permutations(int(encoded_bits.size))
+        return encoded_bits[permutation]
+
     def deinterleave(self, interleaved_bits: np.ndarray) -> np.ndarray:
-        """Deinterleave the received bits to restore original order."""
-        return self.interleaver.deinterlv(interleaved_bits)
+        """Restore original bit order using the inverse permutation for this length."""
+        _, inverse = self._permutations(int(interleaved_bits.size))
+        return interleaved_bits[inverse]
 
 
 if __name__ == "__main__":
@@ -27,7 +49,6 @@ if __name__ == "__main__":
     interleaver = Interleaver(config={
         'coding': {
             'interleaver_seed': 42,
-            'interleaver_length': 10
         }
     })
     test_bits = np.array([0, 1, 1, 0, 1, 0, 0, 1, 1, 0], dtype=np.uint8)

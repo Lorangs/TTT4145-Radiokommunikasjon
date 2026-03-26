@@ -4,9 +4,6 @@ Test and measure the PSD of transmitter of Adalm Pluto SDR
 
 
 import adi
-from sdr_plots import LiveSDRPlotter, StaticSDRPlotter
-import queue
-from scipy import signal
 import numpy as np
 import logging
 
@@ -132,6 +129,7 @@ class SDRTransciever:
 
 if __name__ == "__main__":
     from matplotlib.pyplot import show
+    from sdr_plots import StaticSDRPlotter
 
     transciever = SDRTransciever("config.yaml")
 

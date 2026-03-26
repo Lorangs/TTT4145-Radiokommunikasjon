@@ -10,23 +10,29 @@ import numba
 
 
 class ConvolutionalCoder:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, warmup: bool = True, use_numba: bool = True):
         self.K = int(config['coding']['convolutional_K'])
         self.DATARATE = config['coding']['convolutional_datarate']
         self.GENERATOR = get_generator_matrix(self.K, self.DATARATE)
         self.n = self.GENERATOR.shape[0]  # number of output bits per input bit
+        self.use_numba = bool(use_numba)
 
-        # run encode and decode once to trigger numba compilation before the first real use
-        dummy_input = np.array([0, 1, 0], dtype=np.uint8)
-        self.encode(dummy_input)
-        self.decode(self.encode(dummy_input))
+        if warmup and self.use_numba:
+            # Run encode and decode once to trigger numba compilation before first real use.
+            dummy_input = np.array([0, 1, 0], dtype=np.uint8)
+            self.encode(dummy_input)
+            self.decode(self.encode(dummy_input))
         
     def encode(self, input_bits: np.ndarray, ramp_down: bool = True) -> np.ndarray:
         """Encode input bits using a convolutional code with datarate 1/4."""
+        if not self.use_numba:
+            return _encode.py_func(input_bits, self.GENERATOR, self.K, self.n, ramp_down)
         return _encode(input_bits, self.GENERATOR, self.K, self.n, ramp_down)
     
     def decode(self, received_bits: np.ndarray, ramp_down: bool = True) -> np.ndarray:
         """Decode received bits using the Viterbi algorithm with hard decision."""
+        if not self.use_numba:
+            return _viterbi_decode_hard.py_func(received_bits, self.GENERATOR, self.K, self.n, ramp_down)
         return _viterbi_decode_hard(received_bits, self.GENERATOR, self.K, self.n, ramp_down)
     
 

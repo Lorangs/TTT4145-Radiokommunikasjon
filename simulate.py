@@ -523,29 +523,31 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     config = load_config(args.config)
+    selected_stages = ["modem", "gold", "sync", "full", "correlation"] if args.stage == "all" else [args.stage]
 
-    modem = ModulationProtocol(config)
-    detector = GoldCodeDetector(config)
-    rrc_filter = RRCFilter(config)
-    synchronizer = Synchronizer(config)
-    datagram = make_datagram(args.message)
     cases = build_cases(args.cases, args.noise_std)
     rng = np.random.default_rng(args.seed)
+    modem = ModulationProtocol(config)
+
+    detector = GoldCodeDetector(config) if any(stage in {"gold", "full"} for stage in selected_stages) else None
+    rrc_filter = RRCFilter(config) if any(stage in {"sync", "full"} for stage in selected_stages) else None
+    synchronizer = Synchronizer(config) if any(stage in {"sync", "full"} for stage in selected_stages) else None
+    datagram = make_datagram(args.message) if any(stage in {"modem", "gold", "full"} for stage in selected_stages) else None
 
     results: list[dict] = []
-    selected_stages = ["modem", "gold", "sync", "full", "correlation"] if args.stage == "all" else [args.stage]
 
     for case in cases:
         for stage in selected_stages:
             if stage == "modem":
-                results.append(run_modem_case(case, datagram, modem, rng))
+                results.append(run_modem_case(case, datagram, modem, rng))  # type: ignore[arg-type]
             elif stage == "gold":
-                results.append(run_gold_case(case, datagram, modem, detector, rng))
+                results.append(run_gold_case(case, datagram, modem, detector, rng))  # type: ignore[arg-type]
             elif stage == "sync":
-                results.append(run_sync_case(case, modem, rrc_filter, synchronizer, rng, args))
+                results.append(run_sync_case(case, modem, rrc_filter, synchronizer, rng, args))  # type: ignore[arg-type]
             elif stage == "full":
                 results.append(
                     run_full_case(case, datagram, modem, detector, rrc_filter, synchronizer, rng, args)
+                    # type: ignore[arg-type]
                 )
             elif stage == "correlation":
                 results.append(run_correlation_case(case, config, rng, args))

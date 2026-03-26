@@ -1,5 +1,6 @@
 """
-This module defines the Datagram class, which represents a structured message format for communication.
+This module defines the Datagram class, 
+which represents a structured message format for communication.
 """
 
 
