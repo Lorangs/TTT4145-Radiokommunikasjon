@@ -49,10 +49,12 @@ if __name__ == "__main__":
     interleaver = Interleaver(config={
         'coding': {
             'interleaver_seed': 42,
+            'interleaver_length': 384 # must be equal to total bit stream length before upsampling.
         }
     })
-    test_bits = np.array([0, 1, 1, 0, 1, 0, 0, 1, 1, 0], dtype=np.uint8)
     
+    #test_bits = np.random.randint(0, 2, 256 + 128)  # Generate a random bit stream of length 256
+    test_bits = np.repeat(np.array([0, 1], dtype=np.uint8), 192)  # Generate a test bit stream of length 384 with a known pattern
     print("Original bits:")
     print(test_bits)
     print()
@@ -63,5 +65,6 @@ if __name__ == "__main__":
     print()
 
     deinterleaved_bits = interleaver.deinterleave(interleaved_bits)
-    print("Deinterleaved bits:")
+    bits_check = np.all(test_bits == deinterleaved_bits)
+    print("Deinterleaving successful, bits match!" if bits_check else "Deinterleaving failed, bits do not match.")
     print(deinterleaved_bits)

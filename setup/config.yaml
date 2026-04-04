@@ -20,13 +20,14 @@ receiver:
   buffer_size: 262144                  # 2**18 samples      
 
 modulation:
-  type: "qpsk"                        # Modulation type: "BPSK", "QPSK", More to come
+  type: "PSK"                        # Modulation type: "PSK" and "QAM"
+  order: 2                            # Modulation order: 2 for BPSK, 4 for QPSK, 16 for 16-QAM, etc. Must be a power of 2.
   symbol_rate: 125e3                  # Symbols per second. symbol period = 1 / symbol_rate = 4 us
   samples_per_symbol: 8               # Samples per Symbol. Must be an integer. Determines the oversampling factor for pulse shaping and matched filtering.
   sample_rate: 1e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
 
 coding:
-  rs_num_ecc: 32                       # Number of error correction codewords for Reed-Solomon coding. 
+  rs_num_ecc: 32                       # For 32 ECC symbols, adds 128 bytes of redundancy to the origial message.
   interleaver_seed: 42                 # Seed for random interleaver. Must be the same for transmitter and receiver to ensure correct deinterleaving.
   interleaver_length: 16             # Length of the interleaver. Must be the same for transmitter and receiver to ensure correct deinterleaving.
   convolutional_K: 7                   # Memory length (constraint length) for convolutional coding. Choices are 3, 5 or 7.

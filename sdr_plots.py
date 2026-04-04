@@ -213,7 +213,7 @@ class StaticSDRPlotter:
                                       return_onesided=False, scaling='density')
             freqs = np.fft.fftshift(freqs)
             psd = np.fft.fftshift(psd)
-            psd_db = 10 * np.log10(psd + 1e-12) # add small value to avoid log(0)
+            psd_db = 10 * np.log10(psd + 1e-16) # add small value to avoid log(0)
             
             # Adjust frequency axis if in baseband or passband
             if np.max(freqs) > 1e6:

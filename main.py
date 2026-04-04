@@ -37,6 +37,7 @@ from synchronize import Synchronizer
 from forward_error_correction import FCCodec
 from convolutional_coder import ConvolutionalCoder
 from interleaver import Interleaver
+from scrambler import Scrambler
 
 
 # ================= read configuration file =================
@@ -67,6 +68,10 @@ class SDRChatApp:
 
         # ================= Initialize Modules with configuration =================
         self.modulation_protocol = ModulationProtocol(config)
+        self.interleaver = Interleaver(config)
+        self.scrambler = Scrambler(config)
+        self.fec_codec = FCCodec(config)
+        self.conv_coder = ConvolutionalCoder(config)
         self.matched_filter = RRCFilter(config)
         self.tui = ChatTUI(config)
         self.gold_detector = GoldCodeDetector(config)
@@ -269,6 +274,8 @@ class SDRChatApp:
                 fine_freq_adjusted = self.synchronizer.fine_frequenzy_synchronization(time_adjusted)
 
                 gold_index = self.gold_detector.detect(fine_freq_adjusted)
+                ## Do the downsampling
+
 
                 # === Send data to plotter if debug mode is enabled ===
                 if self.debug_mode and self.plotter is not None:
@@ -318,8 +325,11 @@ class SDRChatApp:
         while not self.stop_event.is_set():
             try:
                 datagram: Datagram = self.tx_queue.get(timeout=0.1)  # Wait for message to send
-                
-                modulated_signal = self.modulation_protocol.modulate_message(datagram)
+                fecoded_data = self.fc_codec.encode(datagram.pack())
+                scrambled_data = self.scrambler.scramble(fecoded_data)
+                interleaved_data = self.interleaver.interleave(scrambled_data)
+                conv_coded_data = self.conv_coder.encode(interleaved_data)
+                modulated_signal = self.modulation_protocol.modulate_message(conv_coded_data)
                 signal_with_gold = self.gold_detector.add_gold_symbols(modulated_signal)
                 upsampled_signal = self.modulation_protocol.upsample_symbols(signal_with_gold)
 
