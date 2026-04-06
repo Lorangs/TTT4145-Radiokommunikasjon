@@ -1,0 +1,30 @@
+{
+  "label": "equalizer_off",
+  "runs": 5,
+  "config_diff": {
+    "synchronization.short_equalizer_enable": false
+  },
+  "detect_success_rate": 0.4,
+  "header_success_rate": 1.0,
+  "payload_success_rate": 0.4,
+  "equalizer_accept_rate": 0.0,
+  "avg_header_alignment_peak": 0.47854883074760435,
+  "avg_timing_header_peak": 0.5677419304847717,
+  "avg_final_peak": 0.4129032254219055,
+  "avg_preamble_cfo_score": 0.4778650943669554,
+  "avg_preamble_cfo_frequency_hz": -1211.6798843747915,
+  "avg_costas_error_mean": -0.04802896822802723,
+  "avg_costas_error_variance": 0.15271947160363197,
+  "avg_costas_phase_span": 0.00946773523464799,
+  "avg_gardner_error_mean": -0.000836393004283309,
+  "avg_gardner_error_variance": 0.05540711041539907,
+  "avg_timing_error": 0.9470541477203369,
+  "avg_carrier_error": 0.7443452417850495,
+  "avg_equalized_error": 0.7443452417850495,
+  "avg_fine_error": 0.713095486164093,
+  "avg_eq_before_mse": 0.0,
+  "avg_eq_after_mse": 0.0,
+  "noise_floor_dB": -1.4633407887052168,
+  "pipeline_roundtrip_ok": true,
+  "representative_run_index": 5
+}

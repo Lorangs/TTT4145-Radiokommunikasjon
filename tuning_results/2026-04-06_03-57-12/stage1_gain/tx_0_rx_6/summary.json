@@ -1,0 +1,30 @@
+{
+  "label": "tx_0_rx_6",
+  "runs": 5,
+  "config_diff": {
+    "receiver.rx_gain_dB": 6
+  },
+  "detect_success_rate": 1.0,
+  "header_success_rate": 1.0,
+  "payload_success_rate": 1.0,
+  "equalizer_accept_rate": 1.0,
+  "avg_header_alignment_peak": 0.9975670099258422,
+  "avg_timing_header_peak": 1.0,
+  "avg_final_peak": 1.0,
+  "avg_preamble_cfo_score": 0.9847529923867006,
+  "avg_preamble_cfo_frequency_hz": 0.6708859796058871,
+  "avg_costas_error_mean": 0.03082231432199478,
+  "avg_costas_error_variance": 0.019304678961634635,
+  "avg_costas_phase_span": 0.02402998339384794,
+  "avg_gardner_error_mean": 0.0020855940412729977,
+  "avg_gardner_error_variance": 0.014056499116122723,
+  "avg_timing_error": 0.6120695829391479,
+  "avg_carrier_error": 0.5194645881652832,
+  "avg_equalized_error": 0.4215233147144318,
+  "avg_fine_error": 0.38462390899658205,
+  "avg_eq_before_mse": 0.36648658613233626,
+  "avg_eq_after_mse": 0.2374310859035084,
+  "noise_floor_dB": -2.793338838443964,
+  "pipeline_roundtrip_ok": true,
+  "representative_run_index": 5
+}

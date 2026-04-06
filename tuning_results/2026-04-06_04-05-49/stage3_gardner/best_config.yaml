@@ -1,0 +1,115 @@
+logging:
+  level: DEBUG
+radio:
+  ip_address: ip:192.168.0.151
+  queue_size: 32
+  debug_mode: true
+  max_datagram_size: 256
+transmitter:
+  tx_cyclic_buffer: false
+  tx_gain_dB: 0
+  tx_bandwidth: 1e6
+  tx_carrier: 866.5e6
+  tx_buffer_size: 1024
+receiver:
+  rx_gain_dB: 6
+  rx_bandwidth: 1e6
+  rx_carrier: 866.5e6
+  gain_mode: manual
+  buffer_size: 262144
+modulation:
+  type: PSK
+  order: 2
+  symbol_rate: 125e3
+  samples_per_symbol: 8
+  sample_rate: 1e6
+coding:
+  rs_num_ecc: 32
+  interleaver_seed: 42
+  interleaver_length: 16
+  convolutional_K: 7
+  convolutional_datarate: 1/4
+  scrambler_register_length: 7
+filter:
+  rrc_roll_off: 0.5
+  rrc_filter_span: 10
+  rrc_filter_scale_factor: 1
+  hardware_filter_enable: false
+  hardware_filter_file: rrc_filter_coefficients.ftr
+  butterworth_enable: false
+  butterworth_order: 4
+  butterworth_cutoff_hz: 140e9
+gold_sequence:
+  code_length: 31
+  code_index: 7
+  header_repeat_count: 2
+  correlation_threshold: 0.7
+  decode_candidate_count: 1
+  decode_candidate_min_peak: 0.65
+  correlation_scale_factor_threshold: 0.7
+synchronization:
+  nfft: 16384
+  signal_bw: 1e6
+  signal_power_threshold_dB: 1.0
+  costas_zeta: 0.707
+  costas_K0: 1.0
+  costas_alpha: 0.02
+  costas_Kp: 0.005
+  costas_Ki: 1.0e-05
+  costas_gate_power_percentile_low: 15.0
+  costas_gate_power_percentile_high: 85.0
+  gardner_Kp: 0.004
+  gardner_Ki: 2.0e-05
+  gardner_gate_energy_percentile_low: 25.0
+  gardner_gate_energy_percentile_high: 90.0
+  gardner_gate_energy_scale_low: 3.0
+  gardner_gate_energy_scale_high: 3.0
+  burst_crop_enable: false
+  burst_crop_margin_symbols: 10
+  burst_crop_window_scale: 1.0
+  burst_crop_min_expected_fraction: 0.9
+  burst_crop_allow_full_buffer_fallback: true
+  header_phase_search_offset_samples: 4
+  preamble_repeat_count: 12
+  timing_preamble_block_symbols: 31
+  preamble_cfo_enable: true
+  preamble_cfo_min_score: 0.45
+  preamble_symbol_min_score: 0.5
+  preamble_symbol_search_radius_symbols: 4
+  header_fractional_timing_enable: true
+  header_fractional_timing_max_offset_samples: 1.0
+  header_fractional_timing_step_samples: 0.25
+  preamble_cfo_max_abs_slope_rad_per_symbol: 0.05
+  midamble_enable: true
+  midamble_repeat_count: 2
+  midamble_insert_after_payload_symbols: 1024
+  midamble_search_radius_symbols: 8
+  midamble_min_score: 0.2
+  header_alignment_candidate_count: 4
+  header_alignment_soft_enable: true
+  header_alignment_soft_phase_min_score: 0.25
+  timing_header_search_radius_symbols: 8
+  timing_header_candidate_count: 5
+  gardner_tracking_payload_symbols: 64
+  header_carrier_branch_selection_enable: true
+  header_carrier_apply_slope_enable: true
+  header_carrier_slope_min_score: 0.55
+  header_carrier_max_abs_slope_rad_per_symbol: 0.05
+  short_equalizer_enable: true
+  short_equalizer_tap_count: 5
+  short_equalizer_regularization: 0.001
+  short_equalizer_apply_if_improved: true
+  short_equalizer_train_on_preamble: true
+  short_equalizer_train_on_header: true
+  short_equalizer_min_training_symbols: 32
+plotter:
+  num_rows: 200
+  center_freq: 866.5e6
+  time_plot_samples: 500
+  update_interval: 100
+  psd_nperseg: 1024
+  max_constellation_points: 500
+  psd_window: hann
+  psd_scaling: density
+  psd_max_points: 2048
+  multi_window: true

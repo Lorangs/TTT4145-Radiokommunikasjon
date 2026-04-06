@@ -21,7 +21,7 @@ from correlation import analyze_signal, build_reference_signal
 from datagram import Datagram, msgType
 from filter import RRCFilter
 from gold_detection import GoldCodeDetector
-from modulation import ModulationProtocol
+from modulation import ModulationProtocol, nearest_constellation_symbols
 from synchronize import Synchronizer
 
 
@@ -78,19 +78,6 @@ def apply_channel(
         time = np.arange(impaired.size, dtype=np.float64) / sample_rate
         impaired = impaired * np.exp(1j * (2 * np.pi * freq_offset * time + phase_offset))
     return add_awgn(impaired, noise_std, rng)
-
-
-def nearest_constellation_symbols(symbols: np.ndarray, modulation_type: str) -> np.ndarray:
-    modulation_type = modulation_type.upper().strip()
-    if modulation_type == "BPSK":
-        return np.where(symbols.real >= 0, 1.0, -1.0).astype(np.complex64)
-    if modulation_type == "QPSK":
-        return (
-            np.where(symbols.real >= 0, 1.0, -1.0)
-            + 1j * np.where(symbols.imag >= 0, 1.0, -1.0)
-        ).astype(np.complex64)
-    raise ValueError(f"Unsupported modulation type: {modulation_type}")
-
 
 def symbol_error_rate(
     received: np.ndarray,
@@ -264,8 +251,8 @@ def run_modem_case(
     zeros, ones = bit_balance(scrambled_bits)
     try:
         recovered = recover_datagram_from_symbols(rx_symbols, modem)
-        recovered_text = recovered.get_payload.tobytes().decode("utf-8", errors="replace")
-        compat_ok = recovered_text == datagram.get_payload.tobytes().decode("utf-8", errors="replace")
+        recovered_text = recovered.payload_text(trim_padding=True)
+        compat_ok = recovered_text == datagram.payload_text(trim_padding=True)
     except Exception as exc:
         compat_ok = False
         compat_error = str(exc)
@@ -393,8 +380,8 @@ def run_full_case(
         payload_rx = payload_rx[: tx_symbols.size]
         try:
             recovered = recover_datagram_from_symbols(payload_rx, modem)
-            recovered_text = recovered.get_payload.tobytes().decode("utf-8", errors="replace")
-            compat_ok = recovered_text == datagram.get_payload.tobytes().decode("utf-8", errors="replace")
+            recovered_text = recovered.payload_text(trim_padding=True)
+            compat_ok = recovered_text == datagram.payload_text(trim_padding=True)
         except Exception as exc:
             compat_error = str(exc)
 

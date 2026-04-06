@@ -1,0 +1,30 @@
+{
+  "label": "eq_5tap_highreg",
+  "runs": 5,
+  "config_diff": {
+    "synchronization.short_equalizer_regularization": 0.01
+  },
+  "detect_success_rate": 0.4,
+  "header_success_rate": 1.0,
+  "payload_success_rate": 0.4,
+  "equalizer_accept_rate": 0.4,
+  "avg_header_alignment_peak": 0.4898963153362274,
+  "avg_timing_header_peak": 0.5225806415081025,
+  "avg_final_peak": 0.5161290287971496,
+  "avg_preamble_cfo_score": 0.5388231139105588,
+  "avg_preamble_cfo_frequency_hz": 738.2626466612544,
+  "avg_costas_error_mean": 0.023076115711592137,
+  "avg_costas_error_variance": 0.14537785567808897,
+  "avg_costas_phase_span": 0.005835752654820681,
+  "avg_gardner_error_mean": 0.005463997926563024,
+  "avg_gardner_error_variance": 0.04713026825338602,
+  "avg_timing_error": 0.8407560229301453,
+  "avg_carrier_error": 0.7631160616874695,
+  "avg_equalized_error": 0.7282133162021637,
+  "avg_fine_error": 0.6929363131523132,
+  "avg_eq_before_mse": 0.9336076630435961,
+  "avg_eq_after_mse": 0.6919934154252523,
+  "noise_floor_dB": -0.9369612833170604,
+  "pipeline_roundtrip_ok": true,
+  "representative_run_index": 4
+}

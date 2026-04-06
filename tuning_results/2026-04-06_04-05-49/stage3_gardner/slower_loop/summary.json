@@ -1,0 +1,31 @@
+{
+  "label": "slower_loop",
+  "runs": 5,
+  "config_diff": {
+    "synchronization.gardner_Kp": 0.001,
+    "synchronization.gardner_Ki": 5e-06
+  },
+  "detect_success_rate": 0.6,
+  "header_success_rate": 1.0,
+  "payload_success_rate": 0.6,
+  "equalizer_accept_rate": 0.6,
+  "avg_header_alignment_peak": 0.6551982089877129,
+  "avg_timing_header_peak": 0.6838709652423859,
+  "avg_final_peak": 0.6774193525314331,
+  "avg_preamble_cfo_score": 0.6553564536048466,
+  "avg_preamble_cfo_frequency_hz": 1351.3236883210461,
+  "avg_costas_error_mean": -0.011693337606266141,
+  "avg_costas_error_variance": 0.1087555194273591,
+  "avg_costas_phase_span": 0.010733561869710685,
+  "avg_gardner_error_mean": 0.0005088981823064386,
+  "avg_gardner_error_variance": 0.03854178935289383,
+  "avg_timing_error": 0.9062639236450195,
+  "avg_carrier_error": 0.6840680003166199,
+  "avg_equalized_error": 0.6304554104804992,
+  "avg_fine_error": 0.6233584523200989,
+  "avg_eq_before_mse": 0.6154341160601277,
+  "avg_eq_after_mse": 0.5384921599180544,
+  "noise_floor_dB": -1.575460420681942,
+  "pipeline_roundtrip_ok": true,
+  "representative_run_index": 2
+}

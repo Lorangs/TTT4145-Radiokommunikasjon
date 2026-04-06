@@ -1,0 +1,30 @@
+[
+  {
+    "label": "baseline",
+    "runs": 10,
+    "config_diff": {},
+    "detect_success_rate": 1.0,
+    "header_success_rate": 1.0,
+    "payload_success_rate": 1.0,
+    "equalizer_accept_rate": 1.0,
+    "avg_header_alignment_peak": 0.9986750304698944,
+    "avg_timing_header_peak": 1.0,
+    "avg_final_peak": 1.0,
+    "avg_preamble_cfo_score": 0.9884695926497804,
+    "avg_preamble_cfo_frequency_hz": 0.07537555994920299,
+    "avg_costas_error_mean": -0.08055684063583612,
+    "avg_costas_error_variance": 0.012874782795552164,
+    "avg_costas_phase_span": 0.014408369222655893,
+    "avg_gardner_error_mean": 0.0018254094989970326,
+    "avg_gardner_error_variance": 0.013901701103895903,
+    "avg_timing_error": 0.7523383915424346,
+    "avg_carrier_error": 0.47607831060886385,
+    "avg_equalized_error": 0.3871463507413864,
+    "avg_fine_error": 0.37268252670764923,
+    "avg_eq_before_mse": 0.35983191364709016,
+    "avg_eq_after_mse": 0.23081715424318042,
+    "noise_floor_dB": -4.4862709204700115,
+    "pipeline_roundtrip_ok": true,
+    "representative_run_index": 7
+  }
+]

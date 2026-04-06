@@ -3,44 +3,46 @@
 # Note: `main.py` may be broken for now and is not part of the current test path.
 ##########################################
 
+# Current active path
+-- Pluto + BPSK path is currently centered around:
+   repeated timing preamble -> repeated Gold header -> coded payload
+   coarse FFT CFO -> preamble CFO -> Gardner -> fractional timing -> preamble/header slip correction -> header carrier correction -> short equalizer -> Costas
+-- `main.py` is still not the reference path; use `Hardware_tester.py`, `frame_layout_check.py`, and the tests as the main validation path.
 
-Pad datagram to fixed size, zero pad after payload (?)  
-Fix pilot header 
+# 0. Before commit / demo
+-- Keep one fresh 20-run hardware confirmation summary alongside the latest commit/demo notes
+-- Review `log/` output from the latest hardware tests and trim any low-signal debug spam that makes field debugging harder
+-- Make sure `README.md` reflects the active burst structure and the recommended scripts to run
 
-Fix synchronization
-
-
-
-# 0. Critical
+# 1. Critical
 -- Fix stale config and active test-path issues:
-   `setup/config.yaml` currently sets `butterworth_cutoff_hz: 140e9`, which is invalid for the configured sample rate
-   make the active scripts use one consistent Gold threshold key
+   `setup/config.yaml` still sets `butterworth_cutoff_hz: 140e9`, which is invalid for the configured sample rate
+   finish converging on one consistent Gold-threshold naming scheme across helpers
 -- Decide whether the Butterworth front-end filter should be part of the real RX path and wire it consistently if yes
 -- Keep the active validation path healthy:
-   `simulate.py`, `correlation.py`, and `simple_tester.py` should stay aligned and usable while `main.py` is inactive
+   `simulate.py`, `correlation.py`, and `simple_tester.py` should stay aligned with the current no-midamble burst format while `main.py` is inactive
 
-# 1. Need to have
+# 2. Need to have
 -- Add automated tests for:
-   datagram packing / unpacking and CRC failures
    scrambler symmetry
    modulation / demodulation round-trips
    Gold detection / removal
-   synchronization stages
+   synchronization-stage behavior with representative captures or synthetic fixtures
 -- Implement real ACK tracking with timeout / retransmission logic; the repo currently creates and sends ACKs but does not retry lost packets
 -- Fix stale helper examples and script entry points so they match the current APIs
 -- Fix `Datagram.as_string()` and `Datagram.as_bytes()` so they honor a caller-provided `msg_id`
 -- Improve logging and error handling around SDR connection failures, synchronization failures, and demodulation / CRC failures in the active scripts
 -- If `main.py` is brought back into use later:
-   validate the RX path with Gardner timing and Gold detection on synchronized symbols
+   validate it against the current stabilized RX path
+   trim the Gold-stripped suffix back to the exact coded payload length before demodulation
    fix cleanup to read `filter.hardware_filter_file` instead of `radio.hardware_filter_file`
 
-# 2. Nice to have
+# 3. Nice to have
 -- Add BER / SER reporting for live captures as well as simulation output
 -- Save debug IQ captures for offline replay and regression testing
 -- Add channel impairment simulation for multipath, phase noise, and sample-rate mismatch
 -- Add message statistics in the TUI, including retries, packet loss, and noise-floor estimates
 -- Add support for configurable frame formats and payload sizes
--- Add optional FEC / interleaving for more robust links
 -- Move plotting / analysis utilities into a cleaner shared module with less coupling to runtime code
 -- Add richer hardware test scripts for TX-only, RX-only, and loopback validation
 -- Multiple radio support

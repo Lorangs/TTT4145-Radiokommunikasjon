@@ -47,10 +47,11 @@ class ChatTUI:
             datagram: Datagram object containing message and metadata
         """
         if datagram.get_msg_type == msgType.DATA:
-            if len(datagram.get_payload) > 60:
-                message_text = datagram.get_payload[:60].tobytes().decode('utf-8', errors='replace') + "..."
+            message_text = datagram.payload_text(trim_padding=True)
+            if len(message_text) > 60:
+                message_text = message_text[:60] + "..."
             else:
-                message_text = datagram.get_payload.tobytes().decode('utf-8', errors='replace')
+                message_text = message_text
 
             timestamp = datetime.now().strftime("%H:%M:%S")
             display_message = f"[{timestamp}][S]\t{message_text}"

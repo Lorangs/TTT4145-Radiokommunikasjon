@@ -6,6 +6,7 @@ import numpy as np
 from dataclasses import dataclass
 from enum import Enum
 from time import time
+from binascii import crc_hqx
 
 class msgType(Enum):
     DATA = 0
@@ -17,13 +18,45 @@ class Datagram():
     Messaage format:
         - msg_type: 1 byte string (DATA or ACK)
         - msg_id: 1 byte np.uint8 (message ID for tracking)
-        - payload: up to 254 bytes (actual message data). The payload is padded with whitespace if it is shorter than 254 bytes.
         - timestamp: 4 bytes np.uint32 (UNIX timestamp in seconds when the datagram was created)
+        - payload_length: 1 byte np.uint8 logical payload length
+        - payload_crc16: 2 bytes CRC-16-CCITT over the logical datagram contents
+        - payload: fixed 247-byte field. Unused bytes are zero-padded on the wire.
     """
+    MSG_ID_SIZE = 1
+    MSG_TYPE_SIZE = 1
+    TIMESTAMP_SIZE = 4
+    PAYLOAD_LENGTH_SIZE = 1
+    CRC16_SIZE = 2
+    HEADER_SIZE = MSG_ID_SIZE + MSG_TYPE_SIZE + TIMESTAMP_SIZE + PAYLOAD_LENGTH_SIZE + CRC16_SIZE
+    PAYLOAD_SIZE = 247
+    TOTAL_SIZE = HEADER_SIZE + PAYLOAD_SIZE
+    PAD_BYTE = np.uint8(0x00)
+
     _msg_id: np.uint8
     _msg_type: msgType
     _timestamp: np.uint32
+    _payload_length: np.uint8
+    _payload_crc16: np.uint16
     _payload: np.ndarray
+
+    @staticmethod
+    def _compute_crc16(
+        msg_id: np.uint8,
+        msg_type: msgType,
+        timestamp: np.uint32,
+        payload_length: np.uint8,
+        payload: np.ndarray,
+    ) -> np.uint16:
+        logical_payload = np.asarray(payload, dtype=np.uint8)[: int(payload_length)]
+        crc_input = (
+            bytes([np.uint8(msg_id)])
+            + bytes([np.uint8(msg_type.value)])
+            + np.uint32(timestamp).tobytes()
+            + bytes([np.uint8(payload_length)])
+            + logical_payload.tobytes()
+        )
+        return np.uint16(crc_hqx(crc_input, 0xFFFF))
 
     def __init__(self, 
                  msg_id: np.uint8 | None = None,
@@ -31,23 +64,17 @@ class Datagram():
                  timestamp: np.uint32 | None = None,
                  payload: np.ndarray = np.array([], dtype=np.uint8),
             ):
-        """Initialize datagram with payload and message type. Automatically computes CRC16 checksum.
+        """Initialize datagram with payload and message type.
             Args:
                 msg_type (msgType): Type of message (DATA or ACK).
                 payload (np.ndarray): Payload data as a numpy array of uint8. If None, it will be treated as an empty payload.
         """
 
-        if len(payload) > 250:
-            raise ValueError("Payload size exceeds maximum of 254 bytes.")
-        
-        if payload.dtype != np.uint8:
-            raise ValueError("Payload must be a numpy array of uint8.")
-        
-        if len(payload) < 250:
-            # Pad payload with whitespace (ASCII 0x20) to ensure fixed size of 254 bytes
-            padding_length = 250 - len(payload)
-            payload = np.concatenate((payload, np.full(padding_length, 0x20, dtype=np.uint8)))
-        
+        payload = np.asarray(payload, dtype=np.uint8)
+
+        if len(payload) > self.PAYLOAD_SIZE:
+            raise ValueError(f"Payload size exceeds maximum of {self.PAYLOAD_SIZE} bytes.")
+
         self._msg_id = msg_id if msg_id is not None else np.random.randint(0, 256, dtype=np.uint8)
         self._msg_type = msg_type        
 
@@ -55,8 +82,16 @@ class Datagram():
             self._timestamp = timestamp
         else:
             self._timestamp = np.uint32(time())
-        
-        self._payload = payload
+
+        self._payload = payload.copy()
+        self._payload_length = np.uint8(payload.size)
+        self._payload_crc16 = self._compute_crc16(
+            msg_id=self._msg_id,
+            msg_type=self._msg_type,
+            timestamp=self._timestamp,
+            payload_length=self._payload_length,
+            payload=self._payload,
+        )
 
 
     @classmethod
@@ -82,8 +117,8 @@ class Datagram():
         Returns:
             Datagram object
         """
-        payload = np.frombuffer(text.strip().encode(encoding), dtype=np.uint8)
-        return cls(msg_type=msg_type, payload=payload)
+        payload = np.frombuffer(text.encode(encoding), dtype=np.uint8)
+        return cls(msg_id=msg_id, msg_type=msg_type, payload=payload)
     
     @classmethod
     def as_bytes(cls, 
@@ -102,15 +137,24 @@ class Datagram():
             Datagram object
         """
         payload = np.frombuffer(data, dtype=np.uint8)
-        return cls(msg_type=msg_type, payload=payload)
+        return cls(msg_id=msg_id, msg_type=msg_type, payload=payload)
 
     def pack(self) -> bytes:
         """Pack datagram into a single numpy array of uint8."""
+        padding_length = self.PAYLOAD_SIZE - int(self._payload_length)
+        padded_payload = np.concatenate(
+            (
+                self._payload,
+                np.full(padding_length, self.PAD_BYTE, dtype=np.uint8),
+            )
+        )
         return (
             bytes([self._msg_id]) +
             bytes([self._msg_type.value]) +
             self._timestamp.tobytes() +
-            bytes(self._payload)
+            bytes([self._payload_length]) +
+            self._payload_crc16.tobytes() +
+            bytes(padded_payload)
         )
 
     @classmethod
@@ -124,21 +168,76 @@ class Datagram():
             ValueError: If the data is corrupted.
         """
 
-        if len(data) != 256:
-            raise ValueError("Data length must be exactly 256 bytes (1+1+4+250).")
+        if len(data) != cls.TOTAL_SIZE:
+            raise ValueError(
+                f"Data length must be exactly {cls.TOTAL_SIZE} bytes "
+                f"({cls.HEADER_SIZE}+{cls.PAYLOAD_SIZE})."
+            )
 
         msg_id = np.uint8(data[0])
         msg_type = msgType(data[1])
-        timestamp_bytes = np.frombuffer(data[2:6], dtype=np.uint32)[0]
-        payload = np.frombuffer(data[6:], dtype=np.uint8).copy()    
+        timestamp_start = cls.MSG_ID_SIZE + cls.MSG_TYPE_SIZE
+        timestamp_end = timestamp_start + cls.TIMESTAMP_SIZE
+        timestamp_bytes = np.frombuffer(data[timestamp_start:timestamp_end], dtype=np.uint32)[0]
+        payload_length_index = timestamp_end
+        payload_length = int(data[payload_length_index])
+        crc_start = payload_length_index + cls.PAYLOAD_LENGTH_SIZE
+        crc_end = crc_start + cls.CRC16_SIZE
+        payload_crc16 = np.frombuffer(data[crc_start:crc_end], dtype=np.uint16)[0]
+        payload_field = np.frombuffer(data[cls.HEADER_SIZE:], dtype=np.uint8).copy()
+
+        if payload_length > cls.PAYLOAD_SIZE:
+            raise ValueError(
+                f"Payload length field exceeds maximum payload size: {payload_length} > {cls.PAYLOAD_SIZE}."
+            )
+
+        padding = payload_field[payload_length:]
+        if padding.size and not np.all(padding == cls.PAD_BYTE):
+            raise ValueError("Datagram payload padding is not zero-filled.")
+
+        payload = payload_field[:payload_length]
+        expected_crc16 = cls._compute_crc16(
+            msg_id=msg_id,
+            msg_type=msg_type,
+            timestamp=timestamp_bytes,
+            payload_length=np.uint8(payload_length),
+            payload=payload,
+        )
+        if np.uint16(payload_crc16) != expected_crc16:
+            raise ValueError(
+                f"Datagram CRC mismatch: expected 0x{int(expected_crc16):04X}, "
+                f"got 0x{int(np.uint16(payload_crc16)):04X}."
+            )
 
         # Route through __init__ so validation/padding rules stay centralized
-        return cls(msg_id=msg_id, msg_type=msg_type, timestamp=timestamp_bytes, payload=payload)
+        datagram = cls(
+            msg_id=msg_id,
+            msg_type=msg_type,
+            timestamp=timestamp_bytes,
+            payload=payload,
+        )
+        datagram._payload_crc16 = np.uint16(payload_crc16)
+        return datagram
 
     @property
     def get_payload(self) ->  np.ndarray:
         """Get payload data."""
         return self._payload
+
+    @property
+    def get_payload_without_padding(self) -> np.ndarray:
+        """Backward-compatible alias for the logical payload bytes."""
+        return self._payload
+
+    @property
+    def get_payload_length(self) -> np.uint8:
+        """Length of the logical payload in bytes."""
+        return self._payload_length
+
+    @property
+    def get_payload_crc16(self) -> np.uint16:
+        """CRC-16 over the logical payload-carrying datagram fields."""
+        return self._payload_crc16
 
     @property
     def get_msg_id(self) -> np.uint8:
@@ -154,11 +253,24 @@ class Datagram():
     def get_timestamp(self) -> np.uint32:
         """Get the timestamp of when the datagram was created."""
         return self._timestamp
+
+    def payload_bytes(self, trim_padding: bool = False) -> bytes:
+        return self._payload.tobytes()
+
+    def payload_text(
+        self,
+        encoding: str = "utf-8",
+        errors: str = "replace",
+        trim_padding: bool = False,
+    ) -> str:
+        return self.payload_bytes(trim_padding=trim_padding).decode(encoding, errors=errors)
     
     def __repr__(self) -> str:
         return (f"\n\tmsg_ID:\t\t{self._msg_id},\n"
                 f"\tmsg_type:\t{self._msg_type.name},\n"
                 f"\ttimestamp:\t{self._timestamp},\n"
+                f"\tpayload_len:\t{self._payload_length},\n"
+                f"\tpayload_crc16:\t0x{int(self._payload_crc16):04X},\n"
                 f"\tpayload:\n{self._payload}\n")
 
 

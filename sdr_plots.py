@@ -7,6 +7,8 @@ Plotting utilities for radio waveform analysis and visualization
 import logging
 from typing import Optional, Tuple, Dict
 import time
+from pathlib import Path
+import re
 
 # Third party imports
 import numpy as np
@@ -43,6 +45,44 @@ class StaticSDRPlotter:
     def __del__(self):
         """Destructor to clean up resources."""
         plt.close('all')
+
+    def _slugify(self, value: str) -> str:
+        normalized = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip().lower())
+        normalized = normalized.strip("._")
+        return normalized or "plot"
+
+    def save_figure(
+        self,
+        fig: Figure,
+        output_path: str | Path,
+        dpi: int = 150,
+        close: bool = False,
+    ) -> Path:
+        """Save a matplotlib figure to disk and optionally close it."""
+        destination = Path(output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(destination, dpi=dpi, bbox_inches="tight")
+        if close:
+            plt.close(fig)
+        return destination
+
+    def save_named_figure(
+        self,
+        fig: Figure,
+        output_dir: str | Path,
+        stem: str,
+        title: str | None = None,
+        dpi: int = 150,
+        close: bool = False,
+    ) -> Path:
+        """Save a figure inside an output directory using a sanitized filename."""
+        name = self._slugify(title if title else stem)
+        return self.save_figure(
+            fig=fig,
+            output_path=Path(output_dir) / f"{name}.png",
+            dpi=dpi,
+            close=close,
+        )
     
     def plot_filter_response(self,
                                 coefficients: np.ndarray,
@@ -258,6 +298,14 @@ class StaticSDRPlotter:
         """
         try:    
             fig, ax = plt.subplots(figsize=figsize)
+            symbols = np.asarray(symbols).reshape(-1)
+            if symbols.size == 0:
+                ax.set_title(f"{title} - No samples", fontsize=12)
+                ax.set_xlabel('In-phase', fontsize=10)
+                ax.set_ylabel('Quadrature', fontsize=10)
+                ax.grid(True, alpha=0.3)
+                plt.tight_layout()
+                return fig
             
             ax.scatter(symbols.real, symbols.imag, alpha=alpha, s=2)
             ax.set_xlabel('In-phase', fontsize=10)
@@ -277,6 +325,38 @@ class StaticSDRPlotter:
             return fig
         except Exception as e:
             print(f"Unexpected error in plot_constellation: {e}")
+            return None
+
+    def plot_histogram(self,
+                      values: np.ndarray,
+                      title: str = "Histogram",
+                      xlabel: str = "Value",
+                      ylabel: str = "Count",
+                      bins: int = 64,
+                      figsize: Tuple[int, int] = (10, 4)) -> Optional[Figure]:
+        """Plot a scalar histogram for decision-axis diagnostics."""
+        try:
+            fig, ax = plt.subplots(figsize=figsize)
+
+            values = np.asarray(values).reshape(-1)
+            if values.size == 0:
+                ax.set_title(f"{title} - No samples", fontsize=12)
+                ax.set_xlabel(xlabel, fontsize=10)
+                ax.set_ylabel(ylabel, fontsize=10)
+                ax.grid(True, alpha=0.3)
+                plt.tight_layout()
+                return fig
+
+            ax.hist(values, bins=max(1, int(bins)), alpha=0.85, color="tab:blue")
+            ax.set_xlabel(xlabel, fontsize=10)
+            ax.set_ylabel(ylabel, fontsize=10)
+            ax.set_title(title, fontsize=12)
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            return fig
+        except Exception as e:
+            print(f"Unexpected error in plot_histogram: {e}")
             return None
     
     def plot_spectrogram(self,
@@ -367,6 +447,54 @@ class StaticSDRPlotter:
         except Exception as e:
             print(f"Error in plot_eye_diagram: {e}")
             return None
+
+    def plot_symbol_eye(self,
+                       values: np.ndarray,
+                       title: str = "Symbol Eye",
+                       num_traces: int = 128,
+                       symbols_per_trace: int = 3,
+                       figsize: Tuple[int, int] = (10, 5)) -> Optional[Figure]:
+        """
+        Plot a symbol-rate eye-style overlay.
+
+        This is an honest fallback for decision-rate streams where only one
+        sample per symbol is available, so a true oversampled eye diagram would
+        be misleading.
+        """
+        try:
+            fig, ax = plt.subplots(figsize=figsize)
+
+            values = np.asarray(values).reshape(-1)
+            trace_length = max(2, int(symbols_per_trace))
+            max_possible_traces = values.size - trace_length + 1
+            if max_possible_traces <= 0:
+                ax.set_title(f"{title} - Not enough symbols", fontsize=12)
+                ax.set_xlabel("Symbol Offset", fontsize=10)
+                ax.set_ylabel("Projected Amplitude", fontsize=10)
+                ax.grid(True, alpha=0.3)
+                plt.tight_layout()
+                return fig
+
+            time = np.arange(trace_length, dtype=np.float32)
+            for start in range(min(max_possible_traces, max(1, int(num_traces)))):
+                ax.plot(
+                    time,
+                    values[start : start + trace_length],
+                    color="tab:orange",
+                    alpha=0.35,
+                    linewidth=0.8,
+                )
+
+            ax.set_xlabel("Symbol Offset", fontsize=10)
+            ax.set_ylabel("Projected Amplitude", fontsize=10)
+            ax.set_title(title, fontsize=12)
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            return fig
+        except Exception as e:
+            print(f"Unexpected error in plot_symbol_eye: {e}")
+            return None
     
     def _plot_eye_single(self, samples, samples_per_symbol, ax, num_traces, symbols_per_trace, title):
         """Helper function to plot single eye diagram."""
@@ -437,6 +565,77 @@ class StaticSDRPlotter:
             return fig
         except Exception as e:
             print(f"Unexpected error in plot_magnitude_phase: {e}")
+            return None
+
+    def plot_scalar_trace(self,
+                         values: np.ndarray,
+                         sample_rate: float,
+                         title: str = "Scalar Trace",
+                         ylabel: str = "Value",
+                         max_samples: int = 4096,
+                         figsize: Tuple[int, int] = (12, 4)) -> Optional[Figure]:
+        """
+        Plot a real-valued diagnostic trace against time.
+
+        Args:
+            values: Real-valued samples
+            sample_rate: Trace sample rate in Hz
+            title: Plot title
+            ylabel: Y-axis label
+            max_samples: Maximum number of points to display
+            figsize: Figure size
+
+        Returns:
+            matplotlib Figure object
+        """
+        try:
+            fig, ax = plt.subplots(figsize=figsize)
+
+            values = np.asarray(values).reshape(-1)[:max_samples]
+            time = np.arange(len(values)) / sample_rate * 1e6
+
+            ax.plot(time, values, linewidth=0.8)
+            ax.set_xlabel('Time (μs)', fontsize=10)
+            ax.set_ylabel(ylabel, fontsize=10)
+            ax.set_title(title, fontsize=12)
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            return fig
+        except Exception as e:
+            print(f"Unexpected error in plot_scalar_trace: {e}")
+            return None
+
+    def plot_index_trace(self,
+                        values: np.ndarray,
+                        title: str = "Index Trace",
+                        xlabel: str = "Index",
+                        ylabel: str = "Value",
+                        max_samples: int = 4096,
+                        figsize: Tuple[int, int] = (12, 4)) -> Optional[Figure]:
+        """Plot a real-valued trace against sample or symbol index."""
+        try:
+            fig, ax = plt.subplots(figsize=figsize)
+
+            values = np.asarray(values).reshape(-1)[:max_samples]
+            if values.size == 0:
+                ax.set_title(f"{title} - No samples", fontsize=12)
+                ax.set_xlabel(xlabel, fontsize=10)
+                ax.set_ylabel(ylabel, fontsize=10)
+                ax.grid(True, alpha=0.3)
+                plt.tight_layout()
+                return fig
+
+            ax.plot(np.arange(values.size), values, linewidth=0.8)
+            ax.set_xlabel(xlabel, fontsize=10)
+            ax.set_ylabel(ylabel, fontsize=10)
+            ax.set_title(title, fontsize=12)
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            return fig
+        except Exception as e:
+            print(f"Unexpected error in plot_index_trace: {e}")
             return None
     
     def plot_all(self,

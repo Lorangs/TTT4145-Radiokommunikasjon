@@ -1,0 +1,6 @@
+receiver.rx_gain_dB: 6
+gold_sequence.correlation_threshold: 0.75
+gold_sequence.decode_candidate_min_peak: 0.7
+synchronization.gardner_Kp: 0.004
+synchronization.gardner_Ki: 2.0e-05
+synchronization.header_carrier_apply_slope_enable: false

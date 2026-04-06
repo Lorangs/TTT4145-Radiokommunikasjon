@@ -10,22 +10,31 @@ import logging
 import numpy as np
 
 from gold_code import get_gold_code_symbols
+from modulation import modulation_rotations, nearest_constellation_symbols
+from modulation import normalize_config_modulation_name
 
 
 class GoldCodeDetector:
     def __init__(self, config: dict):
-        modulation_type = str(config["modulation"]["type"]).upper().strip()
+        modulation_type = normalize_config_modulation_name(config)
         gold_config = config["gold_sequence"]
         code_length = int(gold_config["code_length"])
         code_index = int(gold_config.get("code_index", 0))
+        header_repeat_count = int(gold_config.get("header_repeat_count", 1))
+        header_repeat_count = max(1, header_repeat_count)
 
-        self.gold_symbols = get_gold_code_symbols(
+        self.base_gold_symbols = get_gold_code_symbols(
             modulation_type=modulation_type,
             code_length=code_length,
             code_index=code_index,
-        )
+        ).astype(np.complex64, copy=False)
+        self.gold_symbols = np.tile(
+            self.base_gold_symbols,
+            header_repeat_count,
+        ).astype(np.complex64, copy=False)
         self.code_length = code_length
         self.code_index = code_index
+        self.header_repeat_count = header_repeat_count
 
         threshold = gold_config.get(
             "correlation_scale_factor_threshold",
@@ -88,6 +97,133 @@ class GoldCodeDetector:
         if peak_value < self.correlation_scale_factor_threshold:
             return None, peak_value
         return peak_index, peak_value
+
+    def detect_with_score_in_window(
+        self,
+        received_signal: np.ndarray,
+        start_index: int,
+        stop_index: int,
+    ) -> tuple[int | None, float]:
+        scores = self.normalized_correlation(received_signal)
+        if scores.size == 0:
+            return None, 0.0
+
+        start = max(0, int(start_index))
+        stop = min(int(stop_index), int(scores.size))
+        if stop <= start:
+            return None, 0.0
+
+        window_scores = scores[start:stop]
+        local_offset = int(np.argmax(window_scores))
+        peak_index = start + local_offset
+        peak_value = float(window_scores[local_offset])
+        if peak_value < self.correlation_scale_factor_threshold:
+            return None, peak_value
+        return peak_index, peak_value
+
+
+def detect_gold_with_rotation(
+    received_symbols: np.ndarray,
+    gold_detector: GoldCodeDetector,
+    modulation_type: str,
+    expected_index: int | None = None,
+    search_radius: int | None = None,
+) -> tuple[int | None, float, complex, np.ndarray]:
+    best_index = None
+    best_peak = -1.0
+    best_rotation = 1 + 0j
+    best_decisions = np.array([], dtype=np.complex64)
+
+    for rotation in modulation_rotations(modulation_type):
+        rotated = received_symbols * rotation
+        decisions = nearest_constellation_symbols(rotated, modulation_type)
+        if expected_index is not None and search_radius is not None:
+            start = max(0, int(expected_index) - int(search_radius))
+            stop = int(expected_index) + int(search_radius) + 1
+            index, peak = gold_detector.detect_with_score_in_window(decisions, start, stop)
+        else:
+            index, peak = gold_detector.detect_with_score(decisions)
+        if peak > best_peak:
+            best_peak = peak
+            best_index = index
+            best_rotation = rotation
+            best_decisions = decisions
+
+    return best_index, best_peak, best_rotation, best_decisions
+
+
+def rank_gold_candidates(
+    symbol_stream: np.ndarray,
+    gold_detector: GoldCodeDetector,
+    modulation_type: str,
+    expected_index: int | None = None,
+    search_radius: int | None = None,
+    top_k: int = 5,
+) -> list[dict]:
+    received = np.asarray(symbol_stream).astype(np.complex64, copy=False)
+    candidates: list[dict] = []
+
+    for rotation in modulation_rotations(modulation_type):
+        rotated = received * rotation
+        decisions = nearest_constellation_symbols(rotated, modulation_type)
+        scores = gold_detector.normalized_correlation(decisions)
+        if scores.size == 0:
+            continue
+
+        if expected_index is not None and search_radius is not None:
+            start = max(0, int(expected_index) - int(search_radius))
+            stop = min(int(scores.size), int(expected_index) + int(search_radius) + 1)
+        else:
+            start = 0
+            stop = int(scores.size)
+
+        if stop <= start:
+            continue
+
+        local_scores = scores[start:stop]
+        unique_indices: set[int] = set()
+
+        if expected_index is not None and start <= int(expected_index) < stop:
+            unique_indices.add(int(expected_index) - start)
+
+        top_count = min(int(max(1, top_k)), int(local_scores.size))
+        sorted_local = np.argsort(local_scores)[-top_count:][::-1]
+        for local_idx in sorted_local.tolist():
+            unique_indices.add(int(local_idx))
+
+        for local_idx in sorted(unique_indices):
+            index = start + int(local_idx)
+            peak = float(local_scores[local_idx])
+            candidates.append(
+                {
+                    "phase": 0,
+                    "index": int(index),
+                    "peak": peak,
+                    "rotation": rotation,
+                    "decisions": decisions,
+                }
+            )
+
+    if not candidates:
+        return [
+            {
+                "phase": 0,
+                "index": None,
+                "peak": 0.0,
+                "rotation": 1 + 0j,
+                "decisions": np.array([], dtype=np.complex64),
+            }
+        ]
+
+    def sort_key(candidate: dict) -> tuple[float, float, float]:
+        if expected_index is None:
+            return (-float(candidate["peak"]), 0.0, 0.0)
+        distance = abs(int(candidate["index"]) - int(expected_index))
+        exact_bias = 0 if distance == 0 else 1
+        return (float(exact_bias), float(distance), -float(candidate["peak"]))
+
+    candidates.sort(key=sort_key)
+    return candidates[: max(1, int(top_k))]
 
 
 if __name__ == "__main__":

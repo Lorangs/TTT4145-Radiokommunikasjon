@@ -6,6 +6,9 @@ For 16 ECC symbols. The algorithm adds 64 bytes of redundancy to the original me
 For 8 ECC symbols, it adds 32 bytes of redundancy
 """
 
+import contextlib
+import io
+
 from reedsolo import RSCodec, ReedSolomonError
 import numpy as np
 
@@ -13,6 +16,7 @@ class FCCodec:
     def __init__(self, config: dict):
         self.num_ecc = int(config['coding']['rs_num_ecc'])
         self.rsc = RSCodec(self.num_ecc * 2)  # Initialize Reed-Solomon codec with enough ECC symbols to correct rs_num_ecc errors
+        self.last_decode_error = ""
 
     def encode(self, data: np.ndarray) -> np.ndarray:
         """Encode data using Reed-Solomon code."""
@@ -21,10 +25,12 @@ class FCCodec:
     def rs_decode(self, encoded_data: np.ndarray) -> np.ndarray | None:
         """Decode data using Reed-Solomon code, correcting errors if possible."""
         try:
-            decoded_msg, decoded_msg_ecc, errata_pos = self.rsc.decode(encoded_data.tobytes())
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                decoded_msg, decoded_msg_ecc, errata_pos = self.rsc.decode(encoded_data.tobytes())
+            self.last_decode_error = ""
             return np.array(decoded_msg, dtype=np.uint8)
         except ReedSolomonError as e:
-            print(f"Reed-Solomon decoding failed: {e}")
+            self.last_decode_error = str(e)
             return None
 
 

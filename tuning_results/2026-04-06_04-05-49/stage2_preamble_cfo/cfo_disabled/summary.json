@@ -1,0 +1,30 @@
+{
+  "label": "cfo_disabled",
+  "runs": 5,
+  "config_diff": {
+    "synchronization.preamble_cfo_enable": false
+  },
+  "detect_success_rate": 0.6,
+  "header_success_rate": 1.0,
+  "payload_success_rate": 0.6,
+  "equalizer_accept_rate": 0.6,
+  "avg_header_alignment_peak": 0.6705888658761978,
+  "avg_timing_header_peak": 0.6709677398204803,
+  "avg_final_peak": 0.6645161271095276,
+  "avg_preamble_cfo_score": 0.0,
+  "avg_preamble_cfo_frequency_hz": 0.0,
+  "avg_costas_error_mean": -0.014051746693439782,
+  "avg_costas_error_variance": 0.10033895084634423,
+  "avg_costas_phase_span": 0.0063855678774416445,
+  "avg_gardner_error_mean": 0.0035488209105096757,
+  "avg_gardner_error_variance": 0.03654815852642059,
+  "avg_timing_error": 0.8912590861320495,
+  "avg_carrier_error": 0.6533110022544861,
+  "avg_equalized_error": 0.6013320207595825,
+  "avg_fine_error": 0.5948050618171692,
+  "avg_eq_before_mse": 0.6171298942796046,
+  "avg_eq_after_mse": 0.5293070444168332,
+  "noise_floor_dB": -1.255227299601989,
+  "pipeline_roundtrip_ok": true,
+  "representative_run_index": 4
+}

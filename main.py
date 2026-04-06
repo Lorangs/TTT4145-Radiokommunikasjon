@@ -38,6 +38,7 @@ from forward_error_correction import FCCodec
 from convolutional_coder import ConvolutionalCoder
 from interleaver import Interleaver
 from scrambler import Scrambler
+from project_logger import configure_project_logging, get_configured_log_level
 
 
 # ================= read configuration file =================
@@ -94,7 +95,13 @@ class SDRChatApp:
         os.makedirs(log_dir, exist_ok=True)
         self.log_file = os.path.join(log_dir, f"{datetime.now().date()}-chat-history.txt")
         self.debug_file = os.path.join(log_dir, f"{datetime.now().date()}-debug.log")
-        self._setup_logging(str(config['radio']['log_level']).upper().strip())
+        configure_project_logging(
+            level_name=get_configured_log_level(config),
+            session_name="debug",
+            log_file=self.debug_file,
+            console=True,
+            file_output=True,
+        )
 
         try:
             with open(self.log_file, 'a') as f:
@@ -306,7 +313,10 @@ class SDRChatApp:
                     if received_message.get_msg_type == msgType.DATA:
                         logging.info(f"Received datagram: {received_message}")
                         self.queue_ack(received_message.get_msg_id)
-                        self.chat_history_log(f"Received: [ID:{received_message.get_msg_id}]\t{received_message.get_payload.tobytes().decode('utf-8', errors='replace')}")
+                        self.chat_history_log(
+                            f"Received: [ID:{received_message.get_msg_id}]\t"
+                            f"{received_message.payload_text(trim_padding=True)}"
+                        )
                     else:
                         logging.info(f"Received ACK for msg_ID: {received_message.get_msg_id}")
                         self.chat_history_log(f"Received: [ID:{received_message.get_msg_id}]\tACK")
@@ -388,14 +398,15 @@ class SDRChatApp:
                         continue  # Ignore unknown commands
 
                     # send message as datagram
-                    while len(user_input.encode('utf-8')) > 254:
+                    while len(user_input.encode('utf-8')) > Datagram.PAYLOAD_SIZE:
                         logging.warning("Input message is too long and will be truncated to fit payload size.")
-                        sliced_user_input = user_input[:254]
-                        datagram = Datagram.as_string(user_input, msg_type=msgType.DATA)
+                        sliced_user_input = user_input[: Datagram.PAYLOAD_SIZE]
+                        datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
                         self.queue_datagram(datagram)
-                        user_input = user_input[254:]  # Remove the part that was sent
+                        user_input = user_input[Datagram.PAYLOAD_SIZE :]  # Remove the part that was sent
                    
                     # Final slice (or if input was already short enough)
+                    sliced_user_input = user_input
                     datagram = Datagram.as_string(user_input, msg_type=msgType.DATA)
                     self.queue_datagram(datagram)
                     self.tui.add_message(datagram)  # Add sent message to TUI display
@@ -420,60 +431,6 @@ class SDRChatApp:
                 f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
         except Exception as e:
             logging.error(f"Error writing to chat history log: {e}")
-
-    def _setup_logging(self, debug_mode: str='INFO'):
-        """Setup Python's built-in logging system"""
-        
-        log_level_map = {
-            'DEBUG': logging.DEBUG,
-            'INFO': logging.INFO,
-            'WARNING': logging.WARNING,
-            'WARN': logging.WARNING,
-            'ERROR': logging.ERROR,
-            'CRITICAL': logging.CRITICAL
-        }
-        log_level = log_level_map.get(debug_mode, 'INFO')
-        
-
-        # Add color formatting
-        class ColoredFormatter(logging.Formatter):
-            COLORS = {
-                'DEBUG': '\033[36m',    # Cyan
-                'INFO': '\033[32m',     # Green
-                'WARNING': '\033[33m',  # Yellow
-                'ERROR': '\033[31m',    # Red
-                'CRITICAL': '\033[35m'  # Magenta
-            }
-            RESET = '\033[0m'
-            
-            def format(self, record):
-                log_message = super().format(record)
-                return f"{self.COLORS.get(record.levelname, '')}{log_message}{self.RESET}"
-        
-        # File handler - writes all logs to file
-        file_handler = logging.FileHandler(self.debug_file, mode='a')
-        file_handler.setLevel(log_level)  
-        file_handler.setFormatter(ColoredFormatter(
-            fmt='[%(asctime)s] [%(levelname)-8s] [%(threadName)-12s] %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        ))
-
-        # Configure root logger
-        logging.basicConfig(
-            level=logging.DEBUG,  # Capture all levels
-            handlers=[file_handler],
-            force=True  # Ensure that logging configuration is applied even if logging was previously configured
-        )
-        
-        logging.getLogger('matplotlib').setLevel(logging.WARNING)
-        logging.getLogger('matplotlib.font_manager').setLevel(logging.WARNING)
-        logging.getLogger('matplotlib.pyplot').setLevel(logging.WARNING)
-        logging.getLogger('PIL').setLevel(logging.WARNING)
-        logging.getLogger('pyqtgraph').setLevel(logging.WARNING)
-
-
-        logging.info("\n\n--- New Application Session Started ---")
-        logging.info(f"Logging configured: level={debug_mode}, file={self.debug_file}")
 
     # ================== Cleanup and Signal Handling ==================
     def __del__(self):

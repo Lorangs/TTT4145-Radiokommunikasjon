@@ -1,0 +1,30 @@
+{
+  "label": "phase_only_forced",
+  "runs": 5,
+  "config_diff": {
+    "synchronization.header_carrier_apply_slope_enable": false
+  },
+  "detect_success_rate": 0.8,
+  "header_success_rate": 1.0,
+  "payload_success_rate": 0.8,
+  "equalizer_accept_rate": 0.8,
+  "avg_header_alignment_peak": 0.8213215887546539,
+  "avg_timing_header_peak": 0.851612901687622,
+  "avg_final_peak": 0.8322580635547638,
+  "avg_preamble_cfo_score": 0.8138862177251267,
+  "avg_preamble_cfo_frequency_hz": 543.6106889682103,
+  "avg_costas_error_mean": -0.022780657559633256,
+  "avg_costas_error_variance": 0.051580181694589555,
+  "avg_costas_phase_span": 0.004968086816370487,
+  "avg_gardner_error_mean": 0.005699774358072318,
+  "avg_gardner_error_variance": 0.024685305170714857,
+  "avg_timing_error": 0.5683933854103088,
+  "avg_carrier_error": 0.5675989627838135,
+  "avg_equalized_error": 0.49936228394508364,
+  "avg_fine_error": 0.49793095588684083,
+  "avg_eq_before_mse": 0.4892442756035951,
+  "avg_eq_after_mse": 0.3790867134575979,
+  "noise_floor_dB": -0.7589166399916183,
+  "pipeline_roundtrip_ok": true,
+  "representative_run_index": 1
+}
