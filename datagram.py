@@ -105,12 +105,12 @@ class Datagram():
     @classmethod
     def as_ack(cls, msg_id: np.uint8) -> 'Datagram':
         """Create an ACK datagram for a given message ID."""
-        return cls(msg_id=msg_id, msg_type=msgType.ACK, payload=np.array([], dtype=np.uint8))
+        return cls(msg_id=msg_id, msg_type=msgType.ACK)
     
     @classmethod
-    def as_nack(cls, msg_id: np.uint8) -> 'Datagram':
-        """Create a NACK datagram for a given message ID."""
-        return cls(msg_id=msg_id, msg_type=msgType.NACK, payload=np.array([], dtype=np.uint8))
+    def as_nack(cls) -> 'Datagram':
+        """Create a NACK datagram. MSG_ID is randomly generated as we did not receive a valid datagram."""
+        return cls(msg_type=msgType.NACK)
     
     @classmethod
     def as_string(cls, 
@@ -301,4 +301,5 @@ if __name__ == "__main__":
     print(f"Packed data: {packed_data.hex()}\n")
 
     unpacked_datagram = Datagram.unpack(packed_data)
+    print(f"Unpacked datagram ID: {unpacked_datagram.get_msg_id}")
     print(f"Unpacked datagram: {unpacked_datagram}")

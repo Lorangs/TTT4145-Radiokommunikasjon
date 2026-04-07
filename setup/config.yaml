@@ -31,7 +31,7 @@ transmitter:
 
 receiver: 
   rx_gain_dB: 6                     # range: 0 to 73 dB
-  rx_bandwidth: 1e6                 # RX bandwidth [Hz]
+  rx_bandwidth: 500e3                 # RX bandwidth [Hz]
   rx_carrier: 866.5e6                 # RX local oscillator (carrier frequenzy)
   gain_mode: 'manual'                 # "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
   buffer_size: 262144                  # 2**18 samples      

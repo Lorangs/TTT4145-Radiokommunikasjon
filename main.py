@@ -44,75 +44,48 @@ from project_logger import configure_project_logging, get_configured_log_level
 # ================= Message Handling =================
 def queue_datagram(datagram: Datagram) -> bool:
     """Enqueue a datagram for transmission."""
-    global pending_ack, pending_lock, tx_queue, MAX_RETRIES
-    try:
-        with pending_lock:
-            if datagram.get_msg_type == msgType.DATA:
-                # initialize retry count and store datagram for potential retransmission if ACK is not received within timeout
-                pending_ack[datagram.get_msg_id] = (0, datagram)  
-                tx_queue.put(datagram, timeout=1)
-                logging.info(f"Queued datagram ID {datagram.get_msg_id} for transmission.")
-
-            elif datagram.get_msg_type == msgType.ACK:
-                del pending_ack[datagram.get_msg_id]  # ACK received, remove from pending ACKs
-                logging.info(f"Received ACK for datagram ID {datagram.get_msg_id}. Removed from pending ACKs.")
-
-            elif datagram.get_msg_type == msgType.NACK:
-
-                # Sort by oldest first (lowest retry count) to ensure fair retransmission order
-                sorted_dict = dict(sorted(pending_ack.items(), key=lambda item: item[1][0]))
-                for msg_id, (retries, pending_datagram) in sorted_dict.items():
-                    if retries < MAX_RETRIES:
-                        pending_ack[msg_id] = (retries + 1, pending_datagram)  # Increment retry count
-                        tx_queue.put(pending_datagram, timeout=1)
-                        logging.info(f"Retransmitting datagram ID {msg_id} (Retry {retries + 1}/{MAX_RETRIES})")
-                    else:
-                        logging.warning(f"Max retries reached for datagram ID {msg_id}. Giving up.")
-                        del pending_ack[msg_id]  # Remove from pending ACKs after max retries
-            else:
-                logging.warning(f"Attempting to queue datagram with unknown type: {datagram.get_msg_type}")
-                return False  # Do not queue datagrams with unknown types
-    
-    except Exception as e:
-        logging.error(f"Failed to enqueue datagram ID {datagram.get_msg_id}: {e}")
+    global tx_queue
+    try: 
+        tx_queue.put_nowait(datagram)
+        logging.info(f"Queued datagram ID {datagram.get_msg_id} for transmission.")
+        return True
+    except Full:
+        logging.error(f"Failed to queue datagram ID {datagram.get_msg_id}. TX queue is full.")
         return False
 
-def _mark_acked(msg_id: int) -> None:
-    global pending_ack, pending_lock
+def _track_sent_data(datagram: Datagram) -> None:
+    msg_id = int(datagram.get_msg_id)
+    now_ms = time.time() * 1000.0
     with pending_lock:
-        if msg_id in pending_ack:
-            del pending_ack[msg_id]
-            logging.info(f"Marked datagram ID {msg_id} as ACKed and removed from pending ACKs.")
+        # insert once; keeps original insertion order
+        if msg_id not in pending_ack:
+            pending_ack[msg_id] = {
+                "datagram": datagram,
+                "retries": 0,
+                "last_sent_ms": now_ms,
+            }
         else:
-            logging.warning(f"Attempted to mark datagram ID {msg_id} as ACKed, but it was not found in pending ACKs.")
+            # do not reinsert key (keeps FIFO order)
+            pending_ack[msg_id]["last_sent_ms"] = now_ms
 
+def _ack_received(msg_id: int) -> None:
+    with pending_lock:
+        pending_ack.pop(msg_id, None)
 
-        
-def _ack_timeout_loop():
-    global stop_event, ACK_TIMEOUT_ms, pending_ack, pending_lock, tx_queue, MAX_RETRIES
-    logging.info("ACK timeout loop started.")     
-    while not stop_event.is_set():
-        pending_lock.acquire()
-        for msg_id, (retries, datagram) in pending_ack.items():
-            if retries < MAX_RETRIES:
-                if datagram.get_timestamp_ms() + ACK_TIMEOUT_ms > time.time() * 1000:
-                    pending_ack[msg_id] = (retries + 1, datagram)  # Increment retry count
-                    try:
-                        tx_queue.put(datagram, timeout=1)
-                        logging.info(f"Retransmitting datagram ID {msg_id} (Retry {retries + 1}/{MAX_RETRIES})")
-                    except Full:
-                        logging.warning(f"TX queue is full. Failed to retransmit datagram ID {msg_id}. Will retry later.")
-                else:
-                    continue  # Not yet timed out, skip for now
-            else:
-                logging.warning(f"Max retries reached for datagram ID {msg_id}. Giving up.")
-                del pending_ack[msg_id]  # Remove from pending ACKs after max retries
-        pending_lock.release()
+def _retransmit_oldest_pending() -> None:
+    with pending_lock:
+        if not pending_ack:
+            return
+        oldest_msg_id = next(iter(pending_ack))  # first inserted key
+        entry = pending_ack[oldest_msg_id]
+        dgram = entry["datagram"]
+        if entry["retries"] >= MAX_RETRIES:
+            logging.warning(f"Max retries reached for datagram ID {oldest_msg_id}. Giving up.")
+            pending_ack.pop(oldest_msg_id, None)
+            return
+        entry["retries"] += 1
 
-        time.sleep(ACK_TIMEOUT_ms / 1000.0)  # Sleep for the ACK timeout duration before checking again        
-
-    logging.info("ACK timeout loop stopped.")
-
+    queue_datagram(dgram)  # Re-enqueue for retransmission
 
 ##############################################################################################
 # ================= Callback loops for threads =================
@@ -136,7 +109,6 @@ def _rx_loop():
             gold_index = gold_detector.detect(fine_freq_adjusted)
             ## Do the downsampling
 
-
             # === Send data to plotter if debug mode is enabled ===
             if debug_mode and plotter is not None:
                 try:
@@ -148,50 +120,52 @@ def _rx_loop():
                     logging.error(f"Error sending data to plotter: {e}")
                     pass
             
+            if gold_index is None:
+                continue    # skip if gold code is not detected, likely not a valid signal to process
+          
+            received_symbols = gold_detector.remove_gold_symbols(
+                fine_freq_adjusted,
+                gold_index,
+            )
 
-            if gold_index is not None:
-                received_symbols = gold_detector.remove_gold_symbols(
-                    fine_freq_adjusted,
-                    gold_index,
-                )
-                received_bits = modulation_protocol.demodulate_message(received_symbols)
-                deinterleaved_bits = interleaver.deinterleave(received_bits)
-                descrambled_bits = scrambler.apply(deinterleaved_bits)
-                fec_decoded_bits = fec_codec.rs_decode(descrambled_bits)
-                received_datagram = Datagram.unpack(fec_decoded_bits)
+            received_bits = modulation_protocol.demodulate_signal(received_symbols)
+            conv_decoded_bits = conv_coder.decode(received_bits)
+            deinterleaved_bits = interleaver.deinterleave(conv_decoded_bits)
+            descrambled_bits = scrambler.apply(deinterleaved_bits)
+            fec_decoded_bits = fec_codec.rs_decode(descrambled_bits)
+            received_datagram = Datagram.unpack(fec_decoded_bits)
 
+            try:
                 rx_queue.put(received_datagram)
-                tui_refresh_event.set()  # Signal TUI to refresh display
+            except Full:
+                logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
+                continue
 
-                if received_datagram.get_msg_type == msgType.DATA:
-                    logging.info(f"Received datagram: {received_datagram}")
-                    ack_datagram = Datagram.as_ack(msg_id=received_datagram.get_msg_id)
-                    queue_datagram(ack_datagram)
-                    chat_history_log(
-                        f"Received: [ID:{received_datagram.get_msg_id}]\t"
-                        f"{received_datagram.payload_text()}"
-                    )
-                elif received_datagram.get_msg_type == msgType.ACK:
-                    logging.info(f"Received ACK for msg_ID: {received_datagram.get_msg_id}")
-                    chat_history_log(f"Received: [ID:{received_datagram.get_msg_id}]\tACK")
+            tui_refresh_event.set()  # Signal TUI to refresh display
 
-                    # clear the original message from the
+            if received_datagram.get_msg_type == msgType.DATA:
+                logging.info(f"Received datagram: {received_datagram}")
+                ack_datagram = Datagram.as_ack(msg_id=received_datagram.get_msg_id)
+                queue_datagram(ack_datagram)
+      
+            # mark message as acknowledged if ACK received, so it won't be retransmitted.
+            elif received_datagram.get_msg_type == msgType.ACK:
+                logging.info(f"Received ACK for msg_ID: {received_datagram.get_msg_id}")
+                _ack_received(int(received_datagram.get_msg_id))
+            
 
-                elif received_datagram.get_msg_type == msgType.NACK:
-                    logging.info(f"Received NACK for msg_ID: {received_datagram.get_msg_id}")
-                    chat_history_log(f"Received: [ID:{received_datagram.get_msg_id}]\tNACK")
-
-                    # retransmit the last not-confirmed message with the same msg_ID
-
-                else:
-                    logging.warning(f"Received message with unknown type: {received_datagram.get_msg_type}")
-                    raise ValueError("Unknown message type received.")
-            else: 
-                raise ValueError("Gold code not detected in received signal.")
-                    
+            # retransmit the previous sent message.
+            elif received_datagram.get_msg_type == msgType.NACK:
+                logging.info(f"Received NACK for msg_ID: {received_datagram.get_msg_id}")
+                _retransmit_oldest_pending()
+                
+            else:
+                logging.warning(f"Received message with unknown type: {received_datagram.get_msg_type}")
+                raise ValueError("Unknown message type received.")
+                
         except ValueError as e:
             logging.warning(f"Did not receive valid signal: {e}")
-            nack_datagram = Datagram.as_nack(msg_id=received_datagram.get_msg_id)
+            nack_datagram = Datagram.as_nack()
             queue_datagram(nack_datagram)
             time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
@@ -212,10 +186,10 @@ def _tx_loop():
 
     while not stop_event.is_set():
         try:
-            datagram: Datagram = tx_queue.get(timeout=0.1)  # Wait for message to send
+            tx_datagram: Datagram = tx_queue.get(timeout=0.1) # Wait for message to send
 
-            fec_oded_data = fec_codec.encode(datagram.pack())
-            scrambled_data = scrambler.apply(fec_oded_data)
+            fec_coded_data = fec_codec.encode(tx_datagram.pack())
+            scrambled_data = scrambler.apply(fec_coded_data)
             interleaved_data = interleaver.interleave(scrambled_data)
             conv_coded_data = conv_coder.encode(interleaved_data)
             modulated_signal = modulation_protocol.modulate_message(conv_coded_data)
@@ -228,15 +202,17 @@ def _tx_loop():
                 filtered_signal = matched_filter.apply_filter(upsampled_signal)
 
             if debug_mode:
-                logging.debug(f"TX loop got datagram from queue: {datagram}")
+                logging.debug(f"TX loop got datagram from queue: {tx_datagram}")
 
             sdr.send_signal(filtered_signal)
+            if tx_datagram.get_msg_type == msgType.DATA:
+                _track_sent_data(tx_datagram)  # Track sent data for ACK handling
+        
             time.sleep(0.1)  # Sleep briefly to allow SDR to process transmission
 
-            logging.info(f"Transmitted datagram: {datagram.get_msg_id}")
+            logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
         except Empty:
-            time.sleep(0.1)  # No message to send, sleep briefly
-            continue  # No message to send, continue loop
+            continue  # No message to send, loop again
         except RuntimeError as e:
             logging.error(f"Runtime error in TX loop: {e}")
             stop_event.set()  # Trigger shutdown on critical errors
@@ -291,7 +267,7 @@ def _tui_loop():
                 
                 # Final slice (or if input was already short enough)
                 sliced_user_input = user_input
-                datagram = Datagram.as_string(user_input, msg_type=msgType.DATA)
+                datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
                 queue_datagram(datagram)
                 tui.add_message(datagram)  # Add sent message to TUI display
                 tui.render_screen()  # Update TUI display after sending message
@@ -303,6 +279,45 @@ def _tui_loop():
 
         time.sleep(0.1)  # Sleep briefly to avoid tight error loop
     logging.info("TUI loop stopped.")
+        
+
+def _ack_timeout_loop():
+    logging.info("ACK timeout loop started.")
+
+    while not stop_event.is_set():
+        now_ms = time.time() * 1000.0
+        timed_out_msg_ids = []
+
+        with pending_lock:
+            for msg_id, entry in pending_ack.items():
+                if (now_ms - float(entry["last_sent_ms"])) > ACK_TIMEOUT_ms:
+                    timed_out_msg_ids.append(msg_id)
+
+        for msg_id in timed_out_msg_ids:
+            with pending_lock:
+                entry = pending_ack.get(msg_id)
+                if entry is None:
+                    continue
+
+                if entry["retries"] >= MAX_RETRIES:
+                    logging.warning(f"Max retries reached for datagram ID {msg_id}. Giving up.")
+                    pending_ack.pop(msg_id, None)
+                    continue
+
+                entry["retries"] += 1
+                entry["last_sent_ms"] = now_ms
+                dgram = entry["datagram"]
+
+            try:
+                tx_queue.put_nowait(dgram)
+                logging.info(f"Timeout retransmit for datagram ID {msg_id} (retry {entry['retries']}).")
+            except Full:
+                logging.warning(f"TX queue full. Could not retransmit datagram ID {msg_id}.")
+
+        time.sleep(max(0.05, ACK_TIMEOUT_ms / 1000.0 / 2.0))
+
+    logging.info("ACK timeout loop stopped.")
+# ...existing code...
 
 
 # ================= Start and Stop of sub threads =================
@@ -416,6 +431,18 @@ def _cleanup():
 
     logging.info("Cleanup completed successfully.")
 
+
+# ==================================Logging ======================================
+#def chat_history_log(message: str):
+#    """Append a message to the chat history log file."""
+#    try:
+#        with open(log_file, 'a') as f:
+#            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
+#    except Exception as e:
+#        logging.error(f"Error writing to chat history log: {e}")
+#
+
+
 ##################################################################################
 # ================== Helper functions for plotting and logging ==================
 ##################################################################################
@@ -449,15 +476,6 @@ def _handle_static_plot(plot_data: dict):
     except Exception as e:
         logging.error(f"Error handling static plot: {e}")
 
-# ==================================Logging ======================================
-def chat_history_log(message: str):
-    """Append a message to the chat history log file."""
-    try:
-        with open(log_file, 'a') as f:
-            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
-    except Exception as e:
-        logging.error(f"Error writing to chat history log: {e}")
-
 
 
 
@@ -479,7 +497,8 @@ if __name__ == "__main__":
     else:
         LiveSDRPlotter = None
         LiveSDRPlotterMultiWindow = None
-        StaticPlotSignaler = None
+        StaticSDRPlotter = None
+        #StaticPlotSignaler = None
         QApplication = None
 
 
@@ -509,8 +528,8 @@ if __name__ == "__main__":
     # ================== Message queues for inter-thread communication ==================
     tx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for outgoing messages to be transmitted by the TX thread
     rx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for incoming messages received by the RX thread to be processed by the TUI thread
-    pending_ack: Dict[int, (int, Datagram)] = {}  # Dictionary to track pending ACKs: msg_ID -> (num_retries, datagram)
-    pending_lock = threading.Lock()  # Lock to synchronize access to pending_ack dictionary
+    pending_ack: Dict[int, Dict] = {}  # Dictionary to track pending ACKs with retry counts and datagram info
+    pending_lock = threading.Lock()  # Lock to synchronize access to pending_ack
     MAX_RETRIES = int(config['coding']['max_retries'])  # Maximum number of retransmission attempts for unacknowledged messages
     ACK_TIMEOUT_ms = float(config['radio']['ack_timeout_ms'])  # Timeout for waiting for ACKs (converted to milliseconds
 
