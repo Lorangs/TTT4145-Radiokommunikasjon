@@ -11,6 +11,7 @@ from binascii import crc_hqx
 
 ##########################################################
 # Constants defining datagram structure and sizes
+# These are duplicates of config.yaml values.
 ##########################################################
 MSG_ID_SIZE = 1
 MSG_TYPE_SIZE = 1
@@ -26,6 +27,7 @@ PAD_BYTE = np.uint8(0x00)
 class msgType(Enum):
     DATA = 0
     ACK = 1
+    NACK = 2
 
 @dataclass(init=False, repr=False)
 class Datagram():
@@ -104,6 +106,11 @@ class Datagram():
     def as_ack(cls, msg_id: np.uint8) -> 'Datagram':
         """Create an ACK datagram for a given message ID."""
         return cls(msg_id=msg_id, msg_type=msgType.ACK, payload=np.array([], dtype=np.uint8))
+    
+    @classmethod
+    def as_nack(cls, msg_id: np.uint8) -> 'Datagram':
+        """Create a NACK datagram for a given message ID."""
+        return cls(msg_id=msg_id, msg_type=msgType.NACK, payload=np.array([], dtype=np.uint8))
     
     @classmethod
     def as_string(cls, 
@@ -269,7 +276,7 @@ class Datagram():
         self,
         encoding: str = "utf-8",
         errors: str = "replace",
-        trim_padding: bool = False,
+        trim_padding: bool = True,
     ) -> str:
         return self.payload_bytes(trim_padding=trim_padding).decode(encoding, errors=errors)
     

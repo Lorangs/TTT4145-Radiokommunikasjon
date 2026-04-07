@@ -22,7 +22,7 @@ class FCCodec:
         """Encode data using Reed-Solomon code."""
         return np.array(self.rsc.encode(data.tobytes()), dtype=np.uint8)
 
-    def rs_decode(self, encoded_data: np.ndarray) -> np.ndarray | None:
+    def rs_decode(self, encoded_data: np.ndarray) -> np.ndarray:
         """Decode data using Reed-Solomon code, correcting errors if possible."""
         try:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -31,7 +31,9 @@ class FCCodec:
             return np.array(decoded_msg, dtype=np.uint8)
         except ReedSolomonError as e:
             self.last_decode_error = str(e)
-            return None
+            raise ValueError(f"Reed-Solomon decoding failed: {e}")
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error during decoding: {e}")
 
 
 

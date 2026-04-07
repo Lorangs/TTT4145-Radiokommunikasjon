@@ -5,7 +5,22 @@ radio:
   ip_address: "ip:192.168.0.151"      # ip address of sdr radio
   queue_size: 32                      # Maxsize of RX and TX queues. Also determines the max number of messages stored for display in the TUI.
   debug_mode: True                    # If True, the system will run in debug mode with live plotting of signals.
-  max_datagram_size: 256              # Maximum number of bytes in a datagram. Adjust based on expected message sizes and memory constraints.
+  
+
+# These parameters are copies of the corresponding values in datagram.py. 
+# They are duplicated here to keep all configurable parameters in one place, 
+# but they must be kept consistent with the definitions in datagram.py for the system to function correctly.
+datagram:
+  ack_timeout_ms: 2000
+  max_retries: 3
+  msg_id_size: 1
+  msg_type_size: 1
+  timestamp_size: 4
+  payload_length_size: 1
+  payload_crc_size: 2
+  payload_size: 247              # Maximum number of bytes in a datagram. Adjust based on expected message sizes and memory constraints.
+  header_size: 9                # Total size of the datagram header (msg_id + msg_type + timestamp + payload_length + payload_crc). Must be <= 255 to fit in a single byte length field.
+  total_size: 256              # Total size of the datagram (header + payload + CRC). Must be <= 255 to fit in a single byte length field.
 
 transmitter:
   tx_cyclic_buffer: False             # Enable/disable cyclic buffer

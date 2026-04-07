@@ -37,528 +37,573 @@ from synchronize import Synchronizer
 from forward_error_correction import FCCodec
 from convolutional_coder import ConvolutionalCoder
 from interleaver import Interleaver
-from scrambler import Scrambler
+from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
 
-# ================= read configuration file =================
-try:
-    with open("setup/config.yaml", 'r') as f:
-        config = safe_load(f)
-except Exception as e:
-    print(f"Error loading config file: {e}")
-    raise e
+# ================= Message Handling =================
+def queue_datagram(datagram: Datagram) -> bool:
+    """Enqueue a datagram for transmission."""
+    global pending_ack, pending_lock, tx_queue, MAX_RETRIES
+    try:
+        with pending_lock:
+            if datagram.get_msg_type == msgType.DATA:
+                # initialize retry count and store datagram for potential retransmission if ACK is not received within timeout
+                pending_ack[datagram.get_msg_id] = (0, datagram)  
+                tx_queue.put(datagram, timeout=1)
+                logging.info(f"Queued datagram ID {datagram.get_msg_id} for transmission.")
 
-# Optional imports for debug mode
-if config.get('radio', {}).get('debug_mode', False):
-    from sdr_plots import LiveSDRPlotter, LiveSDRPlotterMultiWindow, StaticSDRPlotter, StaticPlotSignaler
-    from matplotlib.pyplot import show
-    from PyQt6.QtWidgets import QApplication
-    from PyQt6.QtCore import QTimer
-else:
-    LiveSDRPlotter = None
-    LiveSDRPlotterMultiWindow = None
-    StaticPlotSignaler = None
-    QApplication = None
+            elif datagram.get_msg_type == msgType.ACK:
+                del pending_ack[datagram.get_msg_id]  # ACK received, remove from pending ACKs
+                logging.info(f"Received ACK for datagram ID {datagram.get_msg_id}. Removed from pending ACKs.")
 
+            elif datagram.get_msg_type == msgType.NACK:
 
-class SDRChatApp:
-    def __init__(self, config_file: Dict):
-        """Initialize the SDR Chat Application."""
-        self.config: Dict = config
-
-        # ================= Initialize Modules with configuration =================
-        self.modulation_protocol = ModulationProtocol(config)
-        self.interleaver = Interleaver(config)
-        self.scrambler = Scrambler(config)
-        self.fec_codec = FCCodec(config)
-        self.conv_coder = ConvolutionalCoder(config)
-        self.matched_filter = RRCFilter(config)
-        self.tui = ChatTUI(config)
-        self.gold_detector = GoldCodeDetector(config)
-        self.synchronizer = Synchronizer(config)
-        self.sdr = SDRTransciever(config) # must be initilized after Matched Filter module.
-
-        # ================== Threading and synchronization primitives ==================
-        self.stop_event: threading.Event = threading.Event()
-        self.rx_thread: threading.Thread = None
-        self.tx_thread: threading.Thread = None
-        self.tui_thread: threading.Thread = None
-        self.tui_refresh_event: threading.Event = threading.Event()
-
-        # ================== Message queues for inter-thread communication ==================
-        self.tx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))
-        self.rx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))
-    
-        # ================== Logging setup ==================
-        log_dir = "log"
-        os.makedirs(log_dir, exist_ok=True)
-        self.log_file = os.path.join(log_dir, f"{datetime.now().date()}-chat-history.txt")
-        self.debug_file = os.path.join(log_dir, f"{datetime.now().date()}-debug.log")
-        configure_project_logging(
-            level_name=get_configured_log_level(config),
-            session_name="debug",
-            log_file=self.debug_file,
-            console=True,
-            file_output=True,
-        )
-
-        try:
-            with open(self.log_file, 'a') as f:
-                f.write(f"\n\n--- New Chat Session Started at {datetime.now().time()} ---\n")
-        except Exception as e:
-            logging.error(f"Error initializing chat history log: {e}")
-            raise e
-
-        # ================== Debug mode setup ==================
-        self.debug_mode = bool(config['radio']['debug_mode'])
-        self.qapp = None
-        self.plotter = None
-        self.plot_data_queue: Queue[np.ndarray] = Queue(maxsize=32)
-        self.static_plotter = StaticSDRPlotter() if self.debug_mode else None
-        self.static_plot_queue: Queue[Dict[str, np.ndarray]] = Queue(maxsize=8)  # Queue for static plot data (e.g., filter response, constellation points)
-
-        if self.debug_mode:
-            logging.info("Debug mode enabled - initializing live plotter")
-            self._init_plotter()
-        
-                
-        # ====================== Setup signal handlers for graceful shutdown =====================
-        atexit.register(self._cleanup)
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
-        
-        logging.info("SDR Chat Application initialized successfully.")
-
-   
-    # ================= Start and Stop of sub threads =================
-    def start(self):
-        """Start the SDR Chat Application."""
-        if self.sdr.connect():  
-            self.synchronizer.set_noise_floor(self.sdr.measure_noise_floor_dB())
-        else:
-            logging.debug("Failed to connect to SDR.")
-            return False
-        
-        self.stop_event.clear()
-        self.rx_thread = threading.Thread(target=self._rx_loop, daemon=True, name="RX_Thread")
-        self.tx_thread = threading.Thread(target=self._tx_loop, daemon=True, name="TX_Thread")
-        self.tui_thread = threading.Thread(target=self._tui_loop, daemon=True, name="TUI_Thread")
-
-        self.rx_thread.start()
-        self.tx_thread.start()
-        self.tui_thread.start()
-
-        logging.info("Chat Application started successfully.")
-
-        return True
-
-    def stop(self):
-        """Stop the SDR Chat Application."""
-        logging.info("Stopping SDR Chat Application...")
-        self.stop_event.set()
-
-        # Wait for threads to finish
-        if self.rx_thread and self.rx_thread.is_alive():
-            self.rx_thread.join(timeout = 2)
-            if self.rx_thread.is_alive():
-                logging.warning("RX thread did not stop in time")
-                
-        if self.tx_thread and self.tx_thread.is_alive():
-            self.tx_thread.join(timeout = 2)
-            if self.tx_thread.is_alive():
-                logging.warning("TX thread did not stop in time")
-                
-        if self.tui_thread and self.tui_thread.is_alive():
-            self.tui_thread.join(timeout = 2)
-            if self.tui_thread.is_alive():
-                logging.warning("TUI thread did not stop in time")
-        
-        logging.info("All threads stopped.")
-
-    # ================== Debug plotter setup ==================
-    def _init_plotter(self):
-        """Initialize the live plotter for debug mode."""
-        try:
-            if QApplication.instance() is None:
-                self.qapp = QApplication(sys.argv)
-            else:
-                self.qapp = QApplication.instance()
-            
-            # Choose between single-window or multi-window mode
-            use_multi_window = self.config.get('plotter', {}).get('multi_window', True)
-            
-            if use_multi_window:
-                self.plotter = LiveSDRPlotterMultiWindow(self.config, self.plot_data_queue)
-            else:
-                self.plotter = LiveSDRPlotter(self.config, self.plot_data_queue)
-            
-            self.plotter.show()
-
-            # Setup static plot signaler for thread-safe plot requests
-            self.static_plot_signaler = StaticPlotSignaler()
-            self.static_plot_signaler.plot_requested.connect(self._handle_static_plot)
-           
-            logging.info(f"Live plotter initialized ({'multi-window' if use_multi_window else 'single-window'} mode)")
-        except Exception as e:
-            logging.error(f"Failed to initialize live plotter: {e}")
-            self.debug_mode = False
-            self.plotter = None
-
-
-    def _handle_static_plot(self, plot_data: dict):
-        """Handle static plot request (runs in main thread)."""
-        try:
-            plot_type = plot_data.get('type')
-            data = plot_data.get('data')
-            title = plot_data.get('title', '')
-            
-            if plot_type == 'time_domain':
-                self.static_plotter.plot_time_domain(
-                    data, 
-                    float(self.config['modulation']['sample_rate']),
-                    title=title
-                )
-            elif plot_type == 'constellation':
-                self.static_plotter.plot_constellation(data, title=title)
-            elif plot_type == 'psd':
-                sample_rate = float(plot_data.get('sample_rate', self.config['modulation']['sample_rate']))
-                center_freq = float(plot_data.get('center_freq', self.config['plotter']['center_freq']))
-                self.static_plotter.plot_psd(data, sample_rate, center_freq=center_freq, title=title)
-            
-            show(block=False)
-            
-        except Exception as e:
-            logging.error(f"Error handling static plot: {e}")
-
-    def request_static_plot(self, plot_data: dict):
-        """Thread-safe method to request a static plot from any thread."""
-        if self.debug_mode and hasattr(self, 'static_plot_signaler'):
-            self.static_plot_signaler.plot_requested.emit(plot_data)
-
-
-    # ================= Message Handling =================
-    def queue_ack(self, msg_id: np.uint8):
-        """Enqueue ACK for the recieved datagram carrying its msg_id."""
-        try:
-            ack_datagram = Datagram.as_ack(msg_id=msg_id)
-            self.tx_queue.put(ack_datagram)
-            logging.info(f"Enqueue ACK for transmission.\tmsg_ID: {msg_id}")
-            return True
-        
-        except Exception as e:
-            logging.error(f"Failed to enqueue ACK datagram ID {msg_id}: {e}")
-            return False
-
-    def queue_datagram(self, datagram: Datagram) -> bool:
-        """Enqueue a datagram for transmission."""
-        try:
-            self.tx_queue.put(datagram, timeout=1)
-            logging.info(f"Enqueued datagram for transmission.\tmsg_ID: {datagram.get_msg_id}")
-            return True 
-        
-        except Exception as e:
-            logging.error(f"Failed to enqueue datagram ID {datagram.get_msg_id}: {e}")
-            return False
-        
-
-        
-    # ================= Callback loops for threads =================
-    def _rx_loop(self):
-        """Receive loop - continuously receive data from SDR and process it."""
-        logging.info("RX loop started.")
-
-        while not self.stop_event.is_set():
-            try:
-                received_signal = self.sdr.sdr.rx()
-
-                coarse_freq_adjusted = self.synchronizer.coarse_frequenzy_synchronization(received_signal)
-                if coarse_freq_adjusted is None:
-                    continue
-
-                filtered_signal = self.matched_filter.apply_filter(coarse_freq_adjusted)
-                time_adjusted = self.synchronizer.gardner_timing_synchronization(filtered_signal)
-                fine_freq_adjusted = self.synchronizer.fine_frequenzy_synchronization(time_adjusted)
-
-                gold_index = self.gold_detector.detect(fine_freq_adjusted)
-                ## Do the downsampling
-
-
-                # === Send data to plotter if debug mode is enabled ===
-                if self.debug_mode and self.plotter is not None:
-                    try:
-                        # Non-blocking put - drop if queue is full
-                        self.plot_data_queue.put_nowait(fine_freq_adjusted.copy())
-                    except Full:
-                        pass  # Drop frame if plotter can't keep up
-                # ================================================================
-
-                if gold_index is not None:
-                    try:
-                        received_symbols = self.gold_detector.remove_gold_symbols(
-                            fine_freq_adjusted,
-                            gold_index,
-                        )
-                        received_message = self.modulation_protocol.demodulate_message(received_symbols)
-                    except ValueError as e:
-                        logging.warning(f"Message demodulation failed: {e}")
-                        continue
-                    except Exception as e:
-                        logging.error(f"Unexpected error during demodulation: {e}")
-                        continue
-
-                    self.rx_queue.put(received_message)
-                    self.tui_refresh_event.set()  # Signal TUI to refresh display
-
-                    if received_message.get_msg_type == msgType.DATA:
-                        logging.info(f"Received datagram: {received_message}")
-                        self.queue_ack(received_message.get_msg_id)
-                        self.chat_history_log(
-                            f"Received: [ID:{received_message.get_msg_id}]\t"
-                            f"{received_message.payload_text(trim_padding=True)}"
-                        )
+                # Sort by oldest first (lowest retry count) to ensure fair retransmission order
+                sorted_dict = dict(sorted(pending_ack.items(), key=lambda item: item[1][0]))
+                for msg_id, (retries, pending_datagram) in sorted_dict.items():
+                    if retries < MAX_RETRIES:
+                        pending_ack[msg_id] = (retries + 1, pending_datagram)  # Increment retry count
+                        tx_queue.put(pending_datagram, timeout=1)
+                        logging.info(f"Retransmitting datagram ID {msg_id} (Retry {retries + 1}/{MAX_RETRIES})")
                     else:
-                        logging.info(f"Received ACK for msg_ID: {received_message.get_msg_id}")
-                        self.chat_history_log(f"Received: [ID:{received_message.get_msg_id}]\tACK")
-                        
-            except Exception as e:
-                #logging.error(f"Error in receive loop: {e}")
-                time.sleep(0.1)  # Sleep briefly to avoid tight error loop
-                continue
+                        logging.warning(f"Max retries reached for datagram ID {msg_id}. Giving up.")
+                        del pending_ack[msg_id]  # Remove from pending ACKs after max retries
+            else:
+                logging.warning(f"Attempting to queue datagram with unknown type: {datagram.get_msg_type}")
+                return False  # Do not queue datagrams with unknown types
+    
+    except Exception as e:
+        logging.error(f"Failed to enqueue datagram ID {datagram.get_msg_id}: {e}")
+        return False
 
-        logging.info("RX loop stopped.")
+def _mark_acked(msg_id: int) -> None:
+    global pending_ack, pending_lock
+    with pending_lock:
+        if msg_id in pending_ack:
+            del pending_ack[msg_id]
+            logging.info(f"Marked datagram ID {msg_id} as ACKed and removed from pending ACKs.")
+        else:
+            logging.warning(f"Attempted to mark datagram ID {msg_id} as ACKed, but it was not found in pending ACKs.")
 
-    def _tx_loop(self):
-        """Transmit loop - continuously check for outgoing messages and transmit them."""
-        logging.info("TX loop started.")
 
-        while not self.stop_event.is_set():
-            try:
-                datagram: Datagram = self.tx_queue.get(timeout=0.1)  # Wait for message to send
-                fecoded_data = self.fc_codec.encode(datagram.pack())
-                scrambled_data = self.scrambler.scramble(fecoded_data)
-                interleaved_data = self.interleaver.interleave(scrambled_data)
-                conv_coded_data = self.conv_coder.encode(interleaved_data)
-                modulated_signal = self.modulation_protocol.modulate_message(conv_coded_data)
-                signal_with_gold = self.gold_detector.add_gold_symbols(modulated_signal)
-                upsampled_signal = self.modulation_protocol.upsample_symbols(signal_with_gold)
-
-                if self.matched_filter.hardware_filter_enable:
-                    filtered_signal = upsampled_signal  # Assume hardware filtering is applied by the SDR TODO: Not working as inteded
+        
+def _ack_timeout_loop():
+    global stop_event, ACK_TIMEOUT_ms, pending_ack, pending_lock, tx_queue, MAX_RETRIES
+    logging.info("ACK timeout loop started.")     
+    while not stop_event.is_set():
+        pending_lock.acquire()
+        for msg_id, (retries, datagram) in pending_ack.items():
+            if retries < MAX_RETRIES:
+                if datagram.get_timestamp_ms() + ACK_TIMEOUT_ms > time.time() * 1000:
+                    pending_ack[msg_id] = (retries + 1, datagram)  # Increment retry count
+                    try:
+                        tx_queue.put(datagram, timeout=1)
+                        logging.info(f"Retransmitting datagram ID {msg_id} (Retry {retries + 1}/{MAX_RETRIES})")
+                    except Full:
+                        logging.warning(f"TX queue is full. Failed to retransmit datagram ID {msg_id}. Will retry later.")
                 else:
-                    filtered_signal = self.matched_filter.apply_filter(upsampled_signal)
+                    continue  # Not yet timed out, skip for now
+            else:
+                logging.warning(f"Max retries reached for datagram ID {msg_id}. Giving up.")
+                del pending_ack[msg_id]  # Remove from pending ACKs after max retries
+        pending_lock.release()
 
-                if self.debug_mode:
-                    logging.debug(f"TX loop got datagram from queue: {datagram}")
+        time.sleep(ACK_TIMEOUT_ms / 1000.0)  # Sleep for the ACK timeout duration before checking again        
 
-                self.sdr.send_signal(filtered_signal)
+    logging.info("ACK timeout loop stopped.")
 
-                logging.info(f"Transmitted datagram: {datagram.get_msg_id}")
-            except Empty:
-                time.sleep(0.1)  # No message to send, sleep briefly
-                continue  # No message to send, continue loop
-            except Exception as e:
-                logging.error(f"Error: {e}")
-                time.sleep(0.1)  # Sleep briefly to avoid tight error loop
-                continue
 
-        logging.info("TX loop stopped.")
+##############################################################################################
+# ================= Callback loops for threads =================
+##############################################################################################
+def _rx_loop():
+    """Receive loop - continuously receive data from SDR and process it."""
+    logging.info("RX loop started.")
 
-    def _tui_loop(self):
-        """TUI loop - continuously check for user input and enqueue messages to send."""
-        logging.info("TUI loop started.")
+    while not stop_event.is_set():
+        try:
+            received_signal = sdr.sdr.rx()
 
-        self.tui.render_screen()  # Initial render of TUI
+            coarse_freq_adjusted = synchronizer.coarse_frequenzy_synchronization(received_signal)
+            if coarse_freq_adjusted is None:
+                continue    # skip if signal is too weak to process
 
-        while not self.stop_event.is_set():
-            try:
+            filtered_signal = matched_filter.apply_filter(coarse_freq_adjusted)
+            time_adjusted = synchronizer.gardner_timing_synchronization(filtered_signal)
+            fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
 
-                # Wait for either: screen refresh event OR stdin input (max 0.5s timeout)
-                ready_to_read, _, _ = select.select([sys.stdin], [], [], 0.1)
-                
-                if self.tui_refresh_event.is_set():
-                    while not self.rx_queue.empty():
-                        try:
-                            received_datagram: Datagram = self.rx_queue.get_nowait()
-                            self.tui.add_message(received_datagram)
-                            logging.debug(f"TUI processed received datagram ID: {received_datagram.get_msg_id}")
-                        except Empty:
-                            break  # No more messages to process
-                    self.tui.render_screen()  # Update TUI display
-                    self.tui_refresh_event.clear()  # Reset event
+            gold_index = gold_detector.detect(fine_freq_adjusted)
+            ## Do the downsampling
 
-                if ready_to_read:
-                    user_input = sys.stdin.readline().strip()
-                    if user_input.lower() == "/quit":
-                        logging.info("User requested to quit. Stopping application...")
-                        self.running = False
-                        break
-                    elif user_input.startswith("/"):
-                        logging.warning(f"Unknown command: {user_input}")
-                        continue  # Ignore unknown commands
 
-                    # send message as datagram
-                    while len(user_input.encode('utf-8')) > Datagram.PAYLOAD_SIZE:
-                        logging.warning("Input message is too long and will be truncated to fit payload size.")
-                        sliced_user_input = user_input[: Datagram.PAYLOAD_SIZE]
-                        datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
-                        self.queue_datagram(datagram)
-                        user_input = user_input[Datagram.PAYLOAD_SIZE :]  # Remove the part that was sent
-                   
-                    # Final slice (or if input was already short enough)
-                    sliced_user_input = user_input
-                    datagram = Datagram.as_string(user_input, msg_type=msgType.DATA)
-                    self.queue_datagram(datagram)
-                    self.tui.add_message(datagram)  # Add sent message to TUI display
-                    self.tui.render_screen()  # Update TUI display after sending message
-                    self.chat_history_log(f"Sent: [ID:{datagram.get_msg_id}]\t{sliced_user_input}")
+            # === Send data to plotter if debug mode is enabled ===
+            if debug_mode and plotter is not None:
+                try:
+                    # Non-blocking put - drop if queue is full
+                    plot_data_queue.put_nowait(fine_freq_adjusted.copy())
+                except Full:
+                    pass  # Drop frame if plotter can't keep up
+                except Exception as e:
+                    logging.error(f"Error sending data to plotter: {e}")
+                    pass
+            
 
-        
-            except Exception as e:
-                logging.error(f"Error in TUI loop: {e}")
-                continue
+            if gold_index is not None:
+                received_symbols = gold_detector.remove_gold_symbols(
+                    fine_freq_adjusted,
+                    gold_index,
+                )
+                received_bits = modulation_protocol.demodulate_message(received_symbols)
+                deinterleaved_bits = interleaver.deinterleave(received_bits)
+                descrambled_bits = scrambler.apply(deinterleaved_bits)
+                fec_decoded_bits = fec_codec.rs_decode(descrambled_bits)
+                received_datagram = Datagram.unpack(fec_decoded_bits)
 
+                rx_queue.put(received_datagram)
+                tui_refresh_event.set()  # Signal TUI to refresh display
+
+                if received_datagram.get_msg_type == msgType.DATA:
+                    logging.info(f"Received datagram: {received_datagram}")
+                    ack_datagram = Datagram.as_ack(msg_id=received_datagram.get_msg_id)
+                    queue_datagram(ack_datagram)
+                    chat_history_log(
+                        f"Received: [ID:{received_datagram.get_msg_id}]\t"
+                        f"{received_datagram.payload_text()}"
+                    )
+                elif received_datagram.get_msg_type == msgType.ACK:
+                    logging.info(f"Received ACK for msg_ID: {received_datagram.get_msg_id}")
+                    chat_history_log(f"Received: [ID:{received_datagram.get_msg_id}]\tACK")
+
+                    # clear the original message from the
+
+                elif received_datagram.get_msg_type == msgType.NACK:
+                    logging.info(f"Received NACK for msg_ID: {received_datagram.get_msg_id}")
+                    chat_history_log(f"Received: [ID:{received_datagram.get_msg_id}]\tNACK")
+
+                    # retransmit the last not-confirmed message with the same msg_ID
+
+                else:
+                    logging.warning(f"Received message with unknown type: {received_datagram.get_msg_type}")
+                    raise ValueError("Unknown message type received.")
+            else: 
+                raise ValueError("Gold code not detected in received signal.")
+                    
+        except ValueError as e:
+            logging.warning(f"Did not receive valid signal: {e}")
+            nack_datagram = Datagram.as_nack(msg_id=received_datagram.get_msg_id)
+            queue_datagram(nack_datagram)
             time.sleep(0.1)  # Sleep briefly to avoid tight error loop
-
-        logging.info("TUI loop stopped.")
-
-        
-    # ==================================Logging ======================================
-    def chat_history_log(self, message: str):
-        """Append a message to the chat history log file."""
-        try:
-            with open(self.log_file, 'a') as f:
-                f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
+            continue
+        except RuntimeError as e:
+            logging.error(f"Runtime error in RX loop: {e}")
+            stop_event.set()  # Trigger shutdown on critical errors
+            break
         except Exception as e:
-            logging.error(f"Error writing to chat history log: {e}")
+            logging.error(f"Unexpected error in RX loop: {e}")
+            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+            continue
 
-    # ================== Cleanup and Signal Handling ==================
-    def __del__(self):
-        """Fallback cleanup if explicit cleanup wasn't called."""
-        if not hasattr(self, '_cleaned_up'):
-            try:
-                self._cleanup()
-            except:
-                pass  # Silence errors in __del__
+    logging.info("RX loop stopped.")
 
-    def _signal_handler(self, signum, frame):
-        """Handle termination signals for graceful shutdown."""
-        logging.info(f"Signal {signum} received. Initiating graceful shutdown...")
-        self.stop_event.set()
+def _tx_loop():
+    """Transmit loop - continuously check for outgoing messages and transmit them."""
+    logging.info("TX loop started.")
 
-    def _cleanup(self):
-        """Clean up resources, stop threads, and disconnect SDR. This function is designed to be idempotent and can be safely called multiple times."""
+    while not stop_event.is_set():
         try:
-            if not hasattr(self, '_cleaned_up'):
-                self._cleaned_up = True  # Ensure cleanup only runs once
-                logging.info("Starting cleanup...")
+            datagram: Datagram = tx_queue.get(timeout=0.1)  # Wait for message to send
 
-                # 1. Stop all threads and signal them to shutdown
-                if hasattr(self, 'stop_event'):
-                    self.stop_event.set()
+            fec_oded_data = fec_codec.encode(datagram.pack())
+            scrambled_data = scrambler.apply(fec_oded_data)
+            interleaved_data = interleaver.interleave(scrambled_data)
+            conv_coded_data = conv_coder.encode(interleaved_data)
+            modulated_signal = modulation_protocol.modulate_message(conv_coded_data)
+            signal_with_gold = gold_detector.add_gold_symbols(modulated_signal)
+            upsampled_signal = modulation_protocol.upsample_symbols(signal_with_gold)
 
-                # 2. Close debug plots before joining threads
-                if hasattr(self, 'plotter') and self.plotter is not None:
+            if matched_filter.hardware_filter_enable:
+                filtered_signal = upsampled_signal  # Assume hardware filtering is applied by the SDR TODO: Not working as inteded
+            else:
+                filtered_signal = matched_filter.apply_filter(upsampled_signal)
+
+            if debug_mode:
+                logging.debug(f"TX loop got datagram from queue: {datagram}")
+
+            sdr.send_signal(filtered_signal)
+            time.sleep(0.1)  # Sleep briefly to allow SDR to process transmission
+
+            logging.info(f"Transmitted datagram: {datagram.get_msg_id}")
+        except Empty:
+            time.sleep(0.1)  # No message to send, sleep briefly
+            continue  # No message to send, continue loop
+        except RuntimeError as e:
+            logging.error(f"Runtime error in TX loop: {e}")
+            stop_event.set()  # Trigger shutdown on critical errors
+            break
+        except Exception as e:
+            logging.error(f"Error: {e}")
+            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+            continue
+
+    logging.info("TX loop stopped.")
+
+def _tui_loop():
+    """TUI loop - continuously check for user input and enqueue messages to send."""
+    logging.info("TUI loop started.")
+
+    tui.render_screen()  # Initial render of TUI
+
+    while not stop_event.is_set():
+        try:
+
+            # Wait for either: screen refresh event OR stdin input (max 0.5s timeout)
+            ready_to_read, _, _ = select.select([sys.stdin], [], [], 0.1)
+            
+            if tui_refresh_event.is_set():
+                while not rx_queue.empty():
                     try:
-                        self.plotter.close_all()
-                        logging.info("Closed debug plot windows.")
-                    except Exception as e:
-                        logging.error(f"Error closing debug plot windows: {e}")
+                        received_datagram: Datagram = rx_queue.get_nowait()
+                        tui.add_message(received_datagram)
+                        logging.debug(f"TUI processed received datagram ID: {received_datagram.get_msg_id}")
+                    except Empty:
+                        break  # No more messages to process
+                tui.render_screen()  # Update TUI display
+                tui_refresh_event.clear()  # Reset event
 
-                # 3. Clean up queues
-                if hasattr(self, 'rx_queue'):
-                    while not self.rx_queue.empty():
-                        try:
-                            self.rx_queue.get_nowait()
-                        except Empty:
-                            break
-                if hasattr(self, 'tx_queue'):
-                    while not self.tx_queue.empty():
-                        try:
-                            self.tx_queue.get_nowait()
-                        except Empty:
-                            break
+            if ready_to_read:
+                user_input = sys.stdin.readline().strip()
+                if user_input.lower() == "/quit":
+                    logging.info("User requested to quit. Stopping application...")
+                    stop_event.set()
+                    break
+                elif user_input.startswith("/"):
+                    logging.warning(f"Unknown command: {user_input}")
+                    continue  # Ignore unknown commands
 
-                # 4. Join threads with timeout
-                threads = [
-                    ('RX', self.rx_thread),
-                    ('TX', self.tx_thread),
-                    ('TUI', self.tui_thread)
-                ]
-
-                for thread_name, thread in threads:
-                    if thread is not None and thread.is_alive():
-                        logging.info(f"Waiting for {thread_name} thread to finish...")
-                        thread.join(timeout=5.0)
-                        if thread.is_alive():
-                            logging.warning(f"{thread_name} thread did not stop gracefully")
-                        else:
-                            logging.info(f"{thread_name} thread stopped")
+                # send message as datagram
+                while len(user_input.encode('utf-8')) > int(config['datagram']['payload_size']):
+                    logging.warning("Input message is too long and will be truncated to fit payload size.")
+                    sliced_user_input = user_input[: int(config['datagram']['payload_size'])]
+                    datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
+                    queue_datagram(datagram)
+                    user_input = user_input[int(config['datagram']['payload_size']) :]  # Remove the part that was sent
                 
-                # 5. Disconnect SDR
-                if hasattr(self, 'sdr') and self.sdr is not None:
-                    try:
-                        self.sdr.disconnect()
-                        logging.info("SDR disconnected successfully.")
-                    except Exception as e:
-                        logging.error(f"Error disconnecting SDR: {e}")
-
-                # 6. delete filter file if it exists
-                if hasattr(self.matched_filter, 'hardware_filter_enable') and self.matched_filter.hardware_filter_enable:
-                    filter_file = self.config['radio']['hardware_filter_file']
-                    if os.path.exists(filter_file):
-                        os.remove(filter_file)
-                        logging.info(f"Deleted temporary filter file: {filter_file}")
-
-                # 7. Close log files
-                if hasattr(self, 'log_file'):
-                    try:
-                        with open(self.log_file, 'a') as f:
-                            f.write(f"\n--- Chat Session Ended at {datetime.now().strftime('%H:%M:%S')} ---\n")
-                    except Exception as e:
-                        logging.error(f"Error closing chat log: {e}")
-
-                # Force flush logging handlers
-                for handler in logging.root.handlers[:]:
-                    try:
-                        handler.flush()
-                        handler.close()
-                    except:
-                        pass
-
-                logging.info("Cleanup completed successfully.")
+                # Final slice (or if input was already short enough)
+                sliced_user_input = user_input
+                datagram = Datagram.as_string(user_input, msg_type=msgType.DATA)
+                queue_datagram(datagram)
+                tui.add_message(datagram)  # Add sent message to TUI display
+                tui.render_screen()  # Update TUI display after sending message
+                chat_history_log(f"Sent: [ID:{datagram.get_msg_id}]\t{sliced_user_input}")
+    
         except Exception as e:
-            logging.error(f"Error during application cleanup: {e}")
+            logging.error(f"Error in TUI loop: {e}")
+            continue
+
+        time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+    logging.info("TUI loop stopped.")
+
+
+# ================= Start and Stop of sub threads =================
+def start():
+    """Start the SDR Chat Application."""
+    global rx_thread, tx_thread, tui_thread, ack_timeout_thread
+    
+    if sdr.connect():  
+        synchronizer.set_noise_floor(sdr.measure_noise_floor_dB())
+    else:
+        logging.debug("Failed to connect to SDR.")
+        return False
+    
+    try:
+        stop_event.clear()
+        rx_thread = threading.Thread(target=_rx_loop, daemon=True, name="RX_Thread")
+        tx_thread = threading.Thread(target=_tx_loop, daemon=True, name="TX_Thread")
+        tui_thread = threading.Thread(target=_tui_loop, daemon=True, name="TUI_Thread")
+        ack_timeout_thread = threading.Thread(target=_ack_timeout_loop, daemon=True, name="ACK_Timeout_Thread")
+        rx_thread.start()
+        tx_thread.start()
+        tui_thread.start()
+        ack_timeout_thread.start()
+        return True
+    
+    except Exception as e:
+        logging.error(f"Error starting threads: {e}")
+        stop_event.set()
+        return False
+
+
+def stop():
+    """Stop the SDR Chat Application."""
+    global rx_thread, tx_thread, tui_thread, ack_timeout_thread
+    logging.info("Stopping SDR Chat Application...")
+    stop_event.set()
+
+    for name, thread in (("RX", rx_thread), ("TX", tx_thread), ("TUI", tui_thread), ("ACK Timeout", ack_timeout_thread)):
+        if thread and thread.is_alive():
+            try:
+                thread.join(timeout=2.0)
+                if thread.is_alive():
+                    logging.warning(f"{name} thread did not stop within timeout")
+            except Exception as e:
+                logging.error(f"Error waiting for {name} thread: {e}")
+
+    # clear references
+    rx_thread = None
+    tx_thread = None
+    tui_thread = None    
+    ack_timeout_thread = None
+
+def _signal_handler(signum, frame):
+    """Handle termination signals for graceful shutdown."""
+    logging.info(f"Signal {signum} received. Initiating graceful shutdown...")
+    stop_event.set()
+
+def _cleanup():
+    """Clean up resources safely. Idempotent."""
+    global _cleaned_up
+
+    with _cleanup_lock:
+        if _cleaned_up:
+            return
+        _cleaned_up = True
+
+    logging.info("Starting cleanup...")
+
+    stop()
+    
+    # Close debug plot windows
+    if plotter is not None:
+        try:
+            plotter.close_all()
+            logging.info("Closed debug plot windows.")
+        except Exception as e:
+            logging.error(f"Error closing debug plot windows: {e}")
+
+    # Drain queues
+    for q in (rx_queue, tx_queue, plot_data_queue):
+        while not q.empty():
+            try:
+                q.get_nowait()
+            except Empty:
+                break
+
+    # Disconnect SDR
+    try:
+        if sdr is not None:
+            sdr.disconnect()
+            logging.info("SDR disconnected successfully.")
+    except Exception as e:
+        logging.error(f"Error disconnecting SDR: {e}")
+
+    # Remove temporary filter file
+    try:
+        if hasattr(matched_filter, "hardware_filter_enable") and matched_filter.hardware_filter_enable:
+            filter_file = config["radio"]["hardware_filter_file"]
+            if os.path.exists(filter_file):
+                os.remove(filter_file)
+                logging.info(f"Deleted temporary filter file: {filter_file}")
+    except Exception as e:
+        logging.error(f"Error deleting temporary filter file: {e}")
+
+    # Session end marker
+    try:
+        with open(log_file, "a") as f:
+            f.write(f"\n--- Chat Session Ended at {datetime.now().strftime('%H:%M:%S')} ---\n")
+    except Exception as e:
+        logging.error(f"Error closing chat log: {e}")
+
+    logging.info("Cleanup completed successfully.")
+
+##################################################################################
+# ================== Helper functions for plotting and logging ==================
+##################################################################################
+def request_static_plot(plot_data: dict):
+    """Thread-safe method to request a static plot from any thread."""
+    if debug_mode and hasattr(static_plot_signaler, 'plot_requested'):
+        static_plot_signaler.plot_requested.emit(plot_data)
+
+def _handle_static_plot(plot_data: dict):
+    """Handle static plot request (runs in main thread)."""
+    try:
+        plot_type = plot_data.get('type')
+        data = plot_data.get('data')
+        title = plot_data.get('title', '')
+        
+        if plot_type == 'time_domain':
+            static_plotter.plot_time_domain(
+                data, 
+                float(config['modulation']['sample_rate']),
+                title=title
+            )
+        elif plot_type == 'constellation':
+            static_plotter.plot_constellation(data, title=title)
+        elif plot_type == 'psd':
+            sample_rate = float(plot_data.get('sample_rate', config['modulation']['sample_rate']))
+            center_freq = float(plot_data.get('center_freq', config['plotter']['center_freq']))
+            static_plotter.plot_psd(data, sample_rate, center_freq=center_freq, title=title)
+        
+        show(block=False)
+        
+    except Exception as e:
+        logging.error(f"Error handling static plot: {e}")
+
+# ==================================Logging ======================================
+def chat_history_log(message: str):
+    """Append a message to the chat history log file."""
+    try:
+        with open(log_file, 'a') as f:
+            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
+    except Exception as e:
+        logging.error(f"Error writing to chat history log: {e}")
 
 
 
 
 if __name__ == "__main__":
-    app = None
+    # ================= read configuration file =================
     try:
-        app = SDRChatApp(config)
-        if not app.start():
-            logging.critical("Failed to start SDR Chat Application. Exiting.")
-            sys.exit(1)
-
-        logging.info("Entering main loop. Press Ctrl+C to exit.")
-        
-        # Main loop - process Qt events if debug mode is enabled
-        while not app.stop_event.is_set():
-            if app.debug_mode and app.qapp is not None:
-                # Process Qt events to keep plotter responsive
-                app.qapp.processEvents()
-                
-            time.sleep(0.01)  # Small sleep to prevent CPU spinning
-
-    except KeyboardInterrupt:
-        logging.info("Keyboard interrupt received. Stopping application...")
-
+        with open("setup/config.yaml", 'r') as f:
+            config = safe_load(f)
     except Exception as e:
-        logging.error(f"Unexpected error in main loop: {e}")
+        print(f"Error loading config file: {e}")
+        raise e
 
-    finally:
-        if app is not None:
-            app.stop()
-        logging.info("SDR Chat Application has been stopped.")
-        sys.exit(0)
+    # Optional imports for debug mode
+    if config.get('radio', {}).get('debug_mode', False):
+        from sdr_plots import LiveSDRPlotter, LiveSDRPlotterMultiWindow, StaticSDRPlotter, StaticPlotSignaler
+        from matplotlib.pyplot import show
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import QTimer
+    else:
+        LiveSDRPlotter = None
+        LiveSDRPlotterMultiWindow = None
+        StaticPlotSignaler = None
+        QApplication = None
+
+
+    # ================= Initialize Modules with configuration =================
+    modulation_protocol = ModulationProtocol(config)
+    interleaver = Interleaver(config)
+    scrambler = LFSRScrambler(config)
+    fec_codec = FCCodec(config)
+    conv_coder = ConvolutionalCoder(config)
+    matched_filter = RRCFilter(config)
+    tui = ChatTUI(config)
+    gold_detector = GoldCodeDetector(config)
+    synchronizer = Synchronizer(config)
+    sdr = SDRTransciever(config) # must be initilized after Matched Filter module.
+
+    # ================== Threading and synchronization primitives ==================
+    stop_event: threading.Event = threading.Event()
+    tui_refresh_event: threading.Event = threading.Event()
+    rx_thread: threading.Thread = None
+    tx_thread: threading.Thread = None
+    tui_thread: threading.Thread = None
+    ack_timeout_thread: threading.Thread = None 
+
+    _cleaned_up = False
+    _cleanup_lock = threading.Lock()
+
+    # ================== Message queues for inter-thread communication ==================
+    tx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for outgoing messages to be transmitted by the TX thread
+    rx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for incoming messages received by the RX thread to be processed by the TUI thread
+    pending_ack: Dict[int, (int, Datagram)] = {}  # Dictionary to track pending ACKs: msg_ID -> (num_retries, datagram)
+    pending_lock = threading.Lock()  # Lock to synchronize access to pending_ack dictionary
+    MAX_RETRIES = int(config['coding']['max_retries'])  # Maximum number of retransmission attempts for unacknowledged messages
+    ACK_TIMEOUT_ms = float(config['radio']['ack_timeout_ms'])  # Timeout for waiting for ACKs (converted to milliseconds
+
+    # ================== Logging setup ==================
+    log_dir = "log"
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"{datetime.now().date()}-chat-history.txt")
+    debug_file = os.path.join(log_dir, f"{datetime.now().date()}-debug.log")
+    configure_project_logging(
+        level_name=get_configured_log_level(config),
+        session_name="debug",
+        log_file=debug_file,
+        console=True,
+        file_output=True,
+    )
+
+    try:
+        with open(log_file, 'a') as f:
+            f.write(f"\n\n--- New Chat Session Started at {datetime.now().time()} ---\n")
+    except Exception as e:
+        logging.error(f"Error initializing chat history log: {e}")
+        raise e
+
+    # ================== Debug mode setup ==================
+    debug_mode = bool(config['radio']['debug_mode'])
+    qapp = None
+    plotter = None
+    plot_data_queue: Queue[np.ndarray] = Queue(maxsize=32)
+    static_plotter = StaticSDRPlotter() if debug_mode else None
+    static_plot_queue: Queue[Dict[str, np.ndarray]] = Queue(maxsize=8)  # Queue for static plot data (e.g., filter response, constellation points)
+    static_plotter_signaler = None
+
+    if debug_mode:
+        logging.info("Debug mode enabled - initializing live plotter")
+
+        try:
+            if QApplication.instance() is None:
+                qapp = QApplication(sys.argv)
+            else:
+                qapp = QApplication.instance()
+            
+            # Choose between single-window or multi-window mode
+            use_multi_window = config.get('plotter', {}).get('multi_window', True)
+            
+            if use_multi_window:
+                plotter = LiveSDRPlotterMultiWindow(config, plot_data_queue)
+            else:
+                plotter = LiveSDRPlotter(config, plot_data_queue)
+            
+            plotter.show()
+
+            # Setup static plot signaler for thread-safe plot requests
+            static_plot_signaler = StaticPlotSignaler()
+            static_plot_signaler.plot_requested.connect(_handle_static_plot)
+            
+            logging.info(f"Live plotter initialized ({'multi-window' if use_multi_window else 'single-window'} mode)")
+        except Exception as e:
+            logging.error(f"Failed to initialize live plotter: {e}")
+            debug_mode = False
+            plotter = None
+
+    atexit.register(_cleanup)
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+    logging.info("SDR Chat Application initialized successfully.")
+
+
+    # ======================= start application =========================
+    if start():
+        logging.info("SDR Chat Application is running. Press Ctrl+C to stop.")
+
+        try:
+            if debug_mode and qapp is not None:
+                # Keep Qt alive and allow graceful shutdown from stop_event
+                shutdown_timer = QTimer()
+                shutdown_timer.timeout.connect(lambda: qapp.quit() if stop_event.is_set() else None)
+                shutdown_timer.start(100)
+                qapp.exec()
+            else:
+                # Headless mode main loop
+                while not stop_event.is_set():
+                    time.sleep(0.1)
+
+        except KeyboardInterrupt:
+            logging.info("KeyboardInterrupt received. Stopping application...")
+            stop_event.set()
+
+        finally:
+            _cleanup()
+
+    else:
+        logging.error("Failed to start SDR Chat Application.")
+        stop()
+        sys.exit(1)
+
+    sys.exit(0)
