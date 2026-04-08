@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from frame_layout_check import build_report, load_config, validate_layout
+from tests.frame_layout_check import build_report, load_config, validate_layout
 
 
 def test_frame_layout_and_gold_header_detection_pass():

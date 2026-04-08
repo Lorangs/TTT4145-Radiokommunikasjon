@@ -1,48 +1,56 @@
 ##########################################
-# TODO 19.03.26
-# Note: `main.py` may be broken for now and is not part of the current test path.
+# TODO 08.04.26
+# Project goal: reliably send short text strings between two ADALM-Pluto radios.
+# Priority: demo reliability
 ##########################################
 
-# Current active path
--- Pluto + BPSK path is currently centered around:
-   repeated timing preamble -> repeated Gold header -> coded payload
-   coarse FFT CFO -> preamble CFO -> Gardner -> fractional timing -> preamble/header slip correction -> header carrier correction -> short equalizer -> Costas
--- `main.py` is still not the reference path; use `Hardware_tester.py`, `frame_layout_check.py`, and the tests as the main validation path.
+# 0. Demo definition
+-- Lock one short success criterion for the course demo and optimize only for that:
+   short UTF-8 text payloads
+   two Pluto radios
+   one documented setup scenario
+   repeated successful delivery with retries visible when needed
+-- Write down the exact recommended demo setup:
+   cable + attenuation or over-the-air
+   antenna placement / separation
+   TX/RX gains
+   carrier, sample rate, symbol rate
 
-# 0. Before commit / demo
--- Keep one fresh 20-run hardware confirmation summary alongside the latest commit/demo notes
--- Review `log/` output from the latest hardware tests and trim any low-signal debug spam that makes field debugging harder
--- Make sure `README.md` reflects the active burst structure and the recommended scripts to run
+# 2. Highest-value work for reliable text transfer
+-- Make one repeatable two-radio text demo script / workflow and treat it as the primary deliverable
+-- Measure where failures happen in real Pluto runs:
+   no burst detected
+   burst found but sync fails
+   sync succeeds but Gold/header selection is wrong
+   payload decode / CRC / FEC fails
+   DATA arrives but ACK is lost
+-- Save failing IQ captures plus config snapshots so bad runs can be replayed offline
+-- Run controlled tuning on real two-radio tests:
+   TX gain
+   RX gain
+   flush-buffer count
+   burst-crop settings
+   Gold thresholds
+   preamble/header search radii
+-- Decide on a conservative payload limit for the demo if full datagram capacity hurts reliability
 
-# 1. Critical
--- Fix stale config and active test-path issues:
-   `setup/config.yaml` still sets `butterworth_cutoff_hz: 140e9`, which is invalid for the configured sample rate
-   finish converging on one consistent Gold-threshold naming scheme across helpers
--- Decide whether the Butterworth front-end filter should be part of the real RX path and wire it consistently if yes
--- Keep the active validation path healthy:
-   `simulate.py`, `correlation.py`, and `simple_tester.py` should stay aligned with the current no-midamble burst format while `main.py` is inactive
-
-# 2. Need to have
--- Add automated tests for:
+# 3. Tests and validation
+-- Add missing low-level tests for:
    scrambler symmetry
-   modulation / demodulation round-trips
-   Gold detection / removal
-   synchronization-stage behavior with representative captures or synthetic fixtures
--- Implement real ACK tracking with timeout / retransmission logic; the repo currently creates and sends ACKs but does not retry lost packets
--- Fix stale helper examples and script entry points so they match the current APIs
--- Fix `Datagram.as_string()` and `Datagram.as_bytes()` so they honor a caller-provided `msg_id`
--- Improve logging and error handling around SDR connection failures, synchronization failures, and demodulation / CRC failures in the active scripts
--- If `main.py` is brought back into use later:
-   validate it against the current stabilized RX path
-   trim the Gold-stripped suffix back to the exact coded payload length before demodulation
-   fix cleanup to read `filter.hardware_filter_file` instead of `radio.hardware_filter_file`
+   modulation / demodulation round-trip
+   Gold detection / removal with realistic offsets
+   synchronization-stage behavior on saved captures / fixtures
+-- Add one regression path that replays a known-good capture and a known-bad capture through `run_rx_pipeline()`
+-- Keep `Hardware_tester.py`, `tests/frame_layout_check.py`, and `tests/tuning_campaign.py` as the reference validation path unless `main.py` is explicitly re-qualified
 
-# 3. Nice to have
--- Add BER / SER reporting for live captures as well as simulation output
--- Save debug IQ captures for offline replay and regression testing
--- Add channel impairment simulation for multipath, phase noise, and sample-rate mismatch
--- Add message statistics in the TUI, including retries, packet loss, and noise-floor estimates
--- Add support for configurable frame formats and payload sizes
--- Move plotting / analysis utilities into a cleaner shared module with less coupling to runtime code
--- Add richer hardware test scripts for TX-only, RX-only, and loopback validation
--- Multiple radio support
+# 4. Nice to have after the link is stable
+-- BER / SER reporting for both simulation and hardware captures
+-- Better TUI statistics: retries, packet loss, duplicate suppression, noise floor
+-- Cleaner organization of plotting / tuning utilities
+-- Richer hardware scripts for TX-only, RX-only, and loopback checks
+-- Multiple-radio support
+
+# 5. Explicitly not urgent before the demo works
+-- configurable frame formats
+-- broader refactors of helper modules
+-- advanced channel models beyond what is needed to explain measured Pluto behavior

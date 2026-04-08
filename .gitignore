@@ -1,15 +1,17 @@
 # ignore all files in directory
 Channel_Simulator/*
 
+# ignore macOS Finder metadata
+.DS_Store
+
 # ignore python virtual environment
-.venv/*
-.venv
+.venv/
 
 # ignore all backup files
 *.backup
 
 # ignore logs
-log/*
+log/
 
 # ignore initial test files
 initial_tests/*
@@ -27,7 +29,11 @@ barker_code.py
 barker_detection.py
 
 # Ignore plots
-hardware_tester_plots/*
+hardware_tester_plots/
+
+# ignore generated experiment outputs
+#stability_checks/
+#tuning_results/
 
 # ignore pytest cache
 .pytest_cache/

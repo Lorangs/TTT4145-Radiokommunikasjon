@@ -4,7 +4,6 @@ Simple terminal-based chat interface with message status display
 """
 
 import sys
-import threading
 from datetime import datetime
 from collections import deque
 import logging
@@ -40,8 +39,28 @@ class ChatTUI:
         print(" " * 25 + "RadioGram Chat Application")
         print("=" * 80)
         print("Commands: /quit to exit.")
-        
-    def add_message(self, datagram: Datagram):
+
+    def _update_local_message_status(self, msg_id, new_status: str) -> bool:
+        message_id_token = f"[ID:{int(msg_id)}]"
+        for index, message in enumerate(self.messages):
+            if message_id_token not in message or "[IN]" in message:
+                continue
+
+            updated_message = message
+            for old_status in ("[S]", "[R]", "[F]"):
+                if old_status in updated_message:
+                    updated_message = updated_message.replace(old_status, new_status, 1)
+                    self.messages[index] = updated_message
+                    return True
+        return False
+
+    def mark_acknowledged(self, msg_id) -> bool:
+        return self._update_local_message_status(msg_id, "[R]")
+
+    def mark_failed(self, msg_id) -> bool:
+        return self._update_local_message_status(msg_id, "[F]")
+
+    def add_message(self, datagram: Datagram, is_local: bool = True):
         """Add a message to the chat display
         Args:
             datagram: Datagram object containing message and metadata
@@ -54,14 +73,14 @@ class ChatTUI:
                 message_text = message_text
 
             timestamp = datetime.now().strftime("%H:%M:%S")
-            display_message = f"[{timestamp}][S]\t{message_text}"
+            direction_status = "[S]" if is_local else "[IN]"
+            display_message = (
+                f"[{timestamp}][ID:{int(datagram.get_msg_id)}]{direction_status}\t{message_text}"
+            )
             self.messages.append(display_message)
 
         else:
-            for i, msg in enumerate(self.messages):
-                if f"ID:{datagram.get_msg_id}" in msg:
-                    self.messages[i]= msg.replace("[S]", "[R]") # Mark message as received
-                    break
+            self.mark_acknowledged(datagram.get_msg_id)
 
     def render_screen(self):
         """Render the chat screen with current messages"""
@@ -86,7 +105,7 @@ if __name__ == "__main__":
         payload = f"Hello, this is message {i}"
         datagram = Datagram.as_string(payload)
         msgID.append(datagram.get_msg_id)  # Store message ID for later reference
-        chat_ui.add_message(datagram)
+        chat_ui.add_message(datagram, is_local=True)
         chat_ui.render_screen()
 
 

@@ -1029,8 +1029,6 @@ def run_rx_pipeline(
         str(equalizer_state.get("rejection_reason", "")),
     )
 
-    # Midamble re-anchoring was removed after the stabilization pass. Costas now
-    # always runs directly on the accepted post-equalizer symbol stream.
     costas_update_start_symbol = int(header_phase_symbol_index)
     costas_update_stop_symbol = int(
         min(

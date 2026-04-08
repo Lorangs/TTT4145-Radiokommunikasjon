@@ -28,17 +28,19 @@ from yaml import safe_load
 
 # import modules
 from chat_tui import ChatTUI
-from modulation import ModulationProtocol
+from modulation import normalize_config_modulation_name
 from datagram import Datagram, msgType
 from sdr_transciever import SDRTransciever
 from filter import RRCFilter
-from gold_detection import GoldCodeDetector
+from gold_detection import GoldCodeDetector, rank_gold_candidates
 from synchronize import Synchronizer
 from forward_error_correction import FCCodec
 from convolutional_coder import ConvolutionalCoder
 from interleaver import Interleaver
-from scrambler import Scrambler
 from project_logger import configure_project_logging, get_configured_log_level
+from ARQ import StopAndWaitARQ
+from RX_pipeline import run_rx_pipeline
+from TX_pipeline import build_scrambler, build_tx_burst, decode_payload_symbols
 
 
 # ================= read configuration file =================
@@ -68,9 +70,9 @@ class SDRChatApp:
         self.config: Dict = config
 
         # ================= Initialize Modules with configuration =================
-        self.modulation_protocol = ModulationProtocol(config)
+        self.modulation_name = normalize_config_modulation_name(config)
         self.interleaver = Interleaver(config)
-        self.scrambler = Scrambler(config)
+        self.scrambler = build_scrambler(config)
         self.fec_codec = FCCodec(config)
         self.conv_coder = ConvolutionalCoder(config)
         self.matched_filter = RRCFilter(config)
@@ -78,6 +80,22 @@ class SDRChatApp:
         self.gold_detector = GoldCodeDetector(config)
         self.synchronizer = Synchronizer(config)
         self.sdr = SDRTransciever(config) # must be initilized after Matched Filter module.
+        self.guard_symbols = int(config.get('gold_sequence', {}).get('guard_symbols', 32))
+        reference_burst = build_tx_burst(
+            config=self.config,
+            datagram=Datagram.as_ack(np.uint8(0)),
+            modulation_name=self.modulation_name,
+            samples_per_symbol=int(self.config['modulation']['samples_per_symbol']),
+            gold_detector=self.gold_detector,
+            rrc_filter=self.matched_filter,
+            fec=self.fec_codec,
+            interleaver=self.interleaver,
+            conv_coder=self.conv_coder,
+            scrambler=self.scrambler,
+            guard_symbols=self.guard_symbols,
+        )
+        self.payload_symbol_count = int(reference_burst.channel_payload_symbols.size)
+        self.expected_tx_samples = int(reference_burst.tx_signal.size)
 
         # ================== Threading and synchronization primitives ==================
         self.stop_event: threading.Event = threading.Event()
@@ -88,7 +106,15 @@ class SDRChatApp:
 
         # ================== Message queues for inter-thread communication ==================
         self.tx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))
+        self.control_tx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))
         self.rx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))
+        self.ui_status_queue: Queue[tuple[str, np.uint8]] = Queue(maxsize=int(config['radio']['queue_size']))
+        reliability_cfg = config.get('reliability', {})
+        self.reliability = StopAndWaitARQ(
+            ack_timeout_s=float(reliability_cfg.get('ack_timeout_seconds', 1.5)),
+            max_retries=int(reliability_cfg.get('max_retries', 2)),
+            duplicate_cache_size=int(reliability_cfg.get('duplicate_cache_size', 128)),
+        )
     
         # ================== Logging setup ==================
         log_dir = "log"
@@ -242,7 +268,7 @@ class SDRChatApp:
         """Enqueue ACK for the recieved datagram carrying its msg_id."""
         try:
             ack_datagram = Datagram.as_ack(msg_id=msg_id)
-            self.tx_queue.put(ack_datagram)
+            self.control_tx_queue.put(ack_datagram, timeout=1)
             logging.info(f"Enqueue ACK for transmission.\tmsg_ID: {msg_id}")
             return True
         
@@ -260,10 +286,182 @@ class SDRChatApp:
         except Exception as e:
             logging.error(f"Failed to enqueue datagram ID {datagram.get_msg_id}: {e}")
             return False
-        
+
+    def _queue_ui_status(self, event_type: str, msg_id: np.uint8) -> None:
+        try:
+            self.ui_status_queue.put_nowait((event_type, np.uint8(msg_id)))
+            self.tui_refresh_event.set()
+        except Full:
+            logging.debug("UI status queue full; dropping %s for msg_ID=%s", event_type, int(msg_id))
+
+    def _transmit_datagram_once(self, datagram: Datagram):
+        tx_burst = build_tx_burst(
+            config=self.config,
+            datagram=datagram,
+            modulation_name=self.modulation_name,
+            samples_per_symbol=int(self.config['modulation']['samples_per_symbol']),
+            gold_detector=self.gold_detector,
+            rrc_filter=self.matched_filter,
+            fec=self.fec_codec,
+            interleaver=self.interleaver,
+            conv_coder=self.conv_coder,
+            scrambler=self.scrambler,
+            guard_symbols=self.guard_symbols,
+        )
+        filtered_signal = (tx_burst.tx_signal / (2**14)).astype(np.complex64, copy=False)
+
+        if self.debug_mode:
+            logging.debug(f"TX loop got datagram from queue: {datagram}")
+
+        self.sdr.send_signal(filtered_signal)
+        logging.info(
+            "Transmitted %s datagram: %s",
+            datagram.get_msg_type.name,
+            int(datagram.get_msg_id),
+        )
+
+    def _drain_control_tx_queue(self):
+        """Transmit queued ACKs before continuing with lower-priority DATA traffic."""
+        while not self.stop_event.is_set():
+            try:
+                datagram = self.control_tx_queue.get_nowait()
+            except Empty:
+                return
+            self._transmit_datagram_once(datagram)
+
+    def _transmit_with_ack_retry(self, datagram: Datagram):
+        result = self.reliability.transmit_with_retry(
+            datagram,
+            send_once=self._transmit_datagram_once,
+            stop_event=self.stop_event,
+            drain_control_queue=self._drain_control_tx_queue,
+            on_retry_timeout=self._log_retry_timeout,
+        )
+
+        if result.ack_received:
+            logging.info(
+                "ACK received for msg_ID=%s after %d attempt(s).",
+                int(datagram.get_msg_id),
+                result.attempts,
+            )
+            return
+
+        if not self.stop_event.is_set():
+            logging.warning(
+                "No ACK received for msg_ID=%s after %d attempt(s).",
+                int(datagram.get_msg_id),
+                result.attempts,
+            )
+            self.chat_history_log(
+                f"Send failed: [ID:{int(datagram.get_msg_id)}]\t"
+                f"{datagram.payload_text(trim_padding=True)}"
+            )
+            self._queue_ui_status('failed', datagram.get_msg_id)
+
+    def _log_retry_timeout(self, datagram: Datagram, next_attempt: int, max_attempts: int):
+        logging.warning(
+            "ACK timeout for msg_ID=%s, retrying (%d/%d).",
+            int(datagram.get_msg_id),
+            next_attempt,
+            max_attempts,
+        )
 
         
     # ================= Callback loops for threads =================
+    def _decode_received_datagram(self, rx_state) -> Datagram | None:
+        """Decode the first valid datagram candidate from a synchronized RX burst."""
+        phase_candidates = rank_gold_candidates(
+            rx_state.fine_signal,
+            self.gold_detector,
+            self.modulation_name,
+            expected_index=rx_state.expected_header_index,
+            search_radius=int(max(0, self.synchronizer.timing_header_search_radius_symbols)),
+            top_k=int(max(1, self.synchronizer.timing_header_candidate_count)),
+        )
+
+        gold_cfg = self.config.get('gold_sequence', {})
+        decode_candidate_count = int(max(1, gold_cfg.get('decode_candidate_count', 2)))
+        decode_candidate_min_peak = float(
+            gold_cfg.get(
+                'decode_candidate_min_peak',
+                self.gold_detector.correlation_scale_factor_threshold,
+            )
+        )
+        expected_header_index = (
+            int(rx_state.expected_header_index)
+            if rx_state.expected_header_index is not None
+            else None
+        )
+        exact_index_candidates = []
+        fallback_candidates = []
+        seen_candidates: set[tuple[int, complex]] = set()
+
+        for candidate in phase_candidates:
+            candidate_index = candidate['index']
+            if candidate_index is None:
+                continue
+            if float(candidate['peak']) < decode_candidate_min_peak:
+                continue
+
+            candidate_key = (int(candidate_index), complex(candidate['rotation']))
+            if candidate_key in seen_candidates:
+                continue
+            seen_candidates.add(candidate_key)
+
+            if expected_header_index is not None and int(candidate_index) == expected_header_index:
+                exact_index_candidates.append(candidate)
+            else:
+                fallback_candidates.append(candidate)
+
+        exact_index_candidates.sort(key=lambda candidate: float(candidate['peak']), reverse=True)
+        fallback_candidates.sort(key=lambda candidate: float(candidate['peak']), reverse=True)
+        eligible_candidates = (
+            exact_index_candidates[:decode_candidate_count]
+            if exact_index_candidates
+            else fallback_candidates[:decode_candidate_count]
+        )
+
+        for candidate in eligible_candidates:
+            candidate_index = candidate['index']
+            if candidate_index is None:
+                continue
+
+            required_symbols = (
+                int(candidate_index)
+                + int(self.gold_detector.gold_symbols.size)
+                + int(self.payload_symbol_count)
+            )
+            if required_symbols > int(candidate['decisions'].size):
+                continue
+
+            payload_symbols = self.gold_detector.remove_gold_symbols(
+                candidate['decisions'],
+                candidate_index,
+            )
+            payload_symbols = np.asarray(payload_symbols).astype(
+                np.complex64,
+                copy=False,
+            ).reshape(-1)[: self.payload_symbol_count]
+
+            try:
+                return decode_payload_symbols(
+                    payload_symbols=payload_symbols,
+                    modulation_name=self.modulation_name,
+                    fec=self.fec_codec,
+                    interleaver=self.interleaver,
+                    conv_coder=self.conv_coder,
+                    scrambler=self.scrambler,
+                )
+            except Exception as e:
+                logging.debug(
+                    "Candidate decode failed at index %s with peak %.3f: %s",
+                    str(candidate_index),
+                    float(candidate['peak']),
+                    e,
+                )
+
+        return None
+
     def _rx_loop(self):
         """Receive loop - continuously receive data from SDR and process it."""
         logging.info("RX loop started.")
@@ -271,58 +469,54 @@ class SDRChatApp:
         while not self.stop_event.is_set():
             try:
                 received_signal = self.sdr.sdr.rx()
-
-                coarse_freq_adjusted = self.synchronizer.coarse_frequenzy_synchronization(received_signal)
-                if coarse_freq_adjusted is None:
-                    continue
-
-                filtered_signal = self.matched_filter.apply_filter(coarse_freq_adjusted)
-                time_adjusted = self.synchronizer.gardner_timing_synchronization(filtered_signal)
-                fine_freq_adjusted = self.synchronizer.fine_frequenzy_synchronization(time_adjusted)
-
-                gold_index = self.gold_detector.detect(fine_freq_adjusted)
-                ## Do the downsampling
+                rx_state = run_rx_pipeline(
+                    config=self.config,
+                    modulation_name=self.modulation_name,
+                    received_signal=received_signal,
+                    expected_tx_samples=self.expected_tx_samples,
+                    payload_symbol_count=self.payload_symbol_count,
+                    guard_symbols=self.guard_symbols,
+                    gold_detector=self.gold_detector,
+                    rrc_filter=self.matched_filter,
+                    synchronizer=self.synchronizer,
+                )
 
 
                 # === Send data to plotter if debug mode is enabled ===
                 if self.debug_mode and self.plotter is not None:
                     try:
                         # Non-blocking put - drop if queue is full
-                        self.plot_data_queue.put_nowait(fine_freq_adjusted.copy())
+                        self.plot_data_queue.put_nowait(rx_state.fine_signal.copy())
                     except Full:
                         pass  # Drop frame if plotter can't keep up
                 # ================================================================
 
-                if gold_index is not None:
-                    try:
-                        received_symbols = self.gold_detector.remove_gold_symbols(
-                            fine_freq_adjusted,
-                            gold_index,
-                        )
-                        received_message = self.modulation_protocol.demodulate_message(received_symbols)
-                    except ValueError as e:
-                        logging.warning(f"Message demodulation failed: {e}")
-                        continue
-                    except Exception as e:
-                        logging.error(f"Unexpected error during demodulation: {e}")
-                        continue
-
-                    self.rx_queue.put(received_message)
-                    self.tui_refresh_event.set()  # Signal TUI to refresh display
-
+                received_message = self._decode_received_datagram(rx_state)
+                if received_message is not None:
                     if received_message.get_msg_type == msgType.DATA:
-                        logging.info(f"Received datagram: {received_message}")
                         self.queue_ack(received_message.get_msg_id)
-                        self.chat_history_log(
-                            f"Received: [ID:{received_message.get_msg_id}]\t"
-                            f"{received_message.payload_text(trim_padding=True)}"
-                        )
+                        if self.reliability.mark_inbound_data(received_message):
+                            self.rx_queue.put(received_message)
+                            self.tui_refresh_event.set()  # Signal TUI to refresh display
+                            logging.info(f"Received datagram: {received_message}")
+                            self.chat_history_log(
+                                f"Received: [ID:{received_message.get_msg_id}]\t"
+                                f"{received_message.payload_text(trim_padding=True)}"
+                            )
+                        else:
+                            logging.info(
+                                "Received duplicate DATA datagram for msg_ID=%s; resent ACK only.",
+                                int(received_message.get_msg_id),
+                            )
                     else:
+                        self.reliability.acknowledge(received_message.get_msg_id)
+                        self.rx_queue.put(received_message)
+                        self.tui_refresh_event.set()  # Signal TUI to refresh display
                         logging.info(f"Received ACK for msg_ID: {received_message.get_msg_id}")
                         self.chat_history_log(f"Received: [ID:{received_message.get_msg_id}]\tACK")
                         
             except Exception as e:
-                #logging.error(f"Error in receive loop: {e}")
+                logging.debug(f"RX loop skipped buffer: {e}")
                 time.sleep(0.1)  # Sleep briefly to avoid tight error loop
                 continue
 
@@ -334,26 +528,12 @@ class SDRChatApp:
 
         while not self.stop_event.is_set():
             try:
+                self._drain_control_tx_queue()
                 datagram: Datagram = self.tx_queue.get(timeout=0.1)  # Wait for message to send
-                fecoded_data = self.fc_codec.encode(datagram.pack())
-                scrambled_data = self.scrambler.scramble(fecoded_data)
-                interleaved_data = self.interleaver.interleave(scrambled_data)
-                conv_coded_data = self.conv_coder.encode(interleaved_data)
-                modulated_signal = self.modulation_protocol.modulate_message(conv_coded_data)
-                signal_with_gold = self.gold_detector.add_gold_symbols(modulated_signal)
-                upsampled_signal = self.modulation_protocol.upsample_symbols(signal_with_gold)
-
-                if self.matched_filter.hardware_filter_enable:
-                    filtered_signal = upsampled_signal  # Assume hardware filtering is applied by the SDR TODO: Not working as inteded
+                if datagram.get_msg_type == msgType.DATA:
+                    self._transmit_with_ack_retry(datagram)
                 else:
-                    filtered_signal = self.matched_filter.apply_filter(upsampled_signal)
-
-                if self.debug_mode:
-                    logging.debug(f"TX loop got datagram from queue: {datagram}")
-
-                self.sdr.send_signal(filtered_signal)
-
-                logging.info(f"Transmitted datagram: {datagram.get_msg_id}")
+                    self._transmit_datagram_once(datagram)
             except Empty:
                 time.sleep(0.1)  # No message to send, sleep briefly
                 continue  # No message to send, continue loop
@@ -380,10 +560,18 @@ class SDRChatApp:
                     while not self.rx_queue.empty():
                         try:
                             received_datagram: Datagram = self.rx_queue.get_nowait()
-                            self.tui.add_message(received_datagram)
+                            self.tui.add_message(received_datagram, is_local=False)
                             logging.debug(f"TUI processed received datagram ID: {received_datagram.get_msg_id}")
                         except Empty:
                             break  # No more messages to process
+                    while not self.ui_status_queue.empty():
+                        try:
+                            event_type, msg_id = self.ui_status_queue.get_nowait()
+                        except Empty:
+                            break
+
+                        if event_type == 'failed':
+                            self.tui.mark_failed(msg_id)
                     self.tui.render_screen()  # Update TUI display
                     self.tui_refresh_event.clear()  # Reset event
 
@@ -409,7 +597,7 @@ class SDRChatApp:
                     sliced_user_input = user_input
                     datagram = Datagram.as_string(user_input, msg_type=msgType.DATA)
                     self.queue_datagram(datagram)
-                    self.tui.add_message(datagram)  # Add sent message to TUI display
+                    self.tui.add_message(datagram, is_local=True)  # Add sent message to TUI display
                     self.tui.render_screen()  # Update TUI display after sending message
                     self.chat_history_log(f"Sent: [ID:{datagram.get_msg_id}]\t{sliced_user_input}")
 
@@ -505,7 +693,7 @@ class SDRChatApp:
 
                 # 6. delete filter file if it exists
                 if hasattr(self.matched_filter, 'hardware_filter_enable') and self.matched_filter.hardware_filter_enable:
-                    filter_file = self.config['radio']['hardware_filter_file']
+                    filter_file = self.config['filter']['hardware_filter_file']
                     if os.path.exists(filter_file):
                         os.remove(filter_file)
                         logging.info(f"Deleted temporary filter file: {filter_file}")

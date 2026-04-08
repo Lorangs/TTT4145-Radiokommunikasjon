@@ -1,10 +1,8 @@
 # TTT4145-Radiokommunikasjon
 
-Vi velger frekvensbandet 863-870 MHz, siden dette er et "friomrade" i henhold
-til europeisk EKOM. This frequency range also fits the ADALM-Pluto hardware
-used in the project.
+Vi velger frekvensbandet 863-870 MHz, siden dette er et "friomrade" i henhold til europeisk EKOM. This frequency range also fits the ADALM-Pluto hardware used in the project.
 
-The current project focus is a low-rate Pluto SDR link for short IoT-style payloads.
+The current project focus is a low-rate Pluto SDR link for short IoT-style payloads and/or small chat form messages between two or more pluto devices.
 
 ## Active Link Setup
 
@@ -56,14 +54,13 @@ The working over-the-air burst is intentionally simple:
 
 ## Recommended Validation Path
 
-`main.py` is currently not the reference validation path.
+main.py is the main script for the project, it contains the main processing chains and is used for the final over-the-air tests. However, it is not the best choice for everyday smoke testing during development, since it has a lot of moving parts and can be slow to run.
 
-The scripts below are the ones the group should use when checking the current
-system:
+The scripts below are the ones the group should use when checking the current system:
 
 - `Hardware_tester.py`
-- `frame_layout_check.py`
-- `tuning_campaign.py`
+- `python -m tests.frame_layout_check`
+- `python -m tests.tuning_campaign`
 - `pytest`
 
 ## Pluto Hardware Test
@@ -99,19 +96,20 @@ useful than raw complex constellations when judging BPSK decode quality.
 
 ## Frame Layout Check
 
-Use `frame_layout_check.py` to verify the current burst structure and header placement without needing a real Pluto capture:
+Use `python -m tests.frame_layout_check` to verify the current burst structure
+and header placement without needing a real Pluto capture:
 
 ```bash
-./.venv/bin/python frame_layout_check.py
+./.venv/bin/python -m tests.frame_layout_check
 ```
 
 ## Tuning Campaign
 
-Use `tuning_campaign.py` only for controlled multi-run comparisons, not as the
-everyday smoke-test path:
+Use `python -m tests.tuning_campaign` only for controlled multi-run
+comparisons, not as the everyday smoke-test path:
 
 ```bash
-./.venv/bin/python tuning_campaign.py
+./.venv/bin/python -m tests.tuning_campaign
 ```
 
 ## Tests
