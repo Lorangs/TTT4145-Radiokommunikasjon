@@ -64,6 +64,11 @@ The scripts below are the ones the group should use when checking the current sy
 - `pytest`
 
 ## Pluto Hardware Test
+Use the following command to verify that the Pluto is reachable and working with the current Python environment:
+
+```bash
+./.venv/bin/python -c "import adi; sdr = adi.Pluto('ip:192.168.0.151'); print('Connected to Pluto:', sdr.rx_lo)"
+```
 
 Use `Hardware_tester.py` for the main Pluto smoke test:
 
@@ -76,7 +81,7 @@ Useful options:
 ```bash
 ./.venv/bin/python Hardware_tester.py --payload "hello pluto" --flush-buffers 3
 ./.venv/bin/python Hardware_tester.py --runs 20
-./.venv/bin/python Hardware_tester.py --plots
+./.venv/bin/python Hardware_tester.py --plots noshow
 ```
 
 The script will:
@@ -96,8 +101,7 @@ useful than raw complex constellations when judging BPSK decode quality.
 
 ## Frame Layout Check
 
-Use `python -m tests.frame_layout_check` to verify the current burst structure
-and header placement without needing a real Pluto capture:
+Use `python -m tests.frame_layout_check` to verify the current burst structure and header placement without needing a real Pluto capture:
 
 ```bash
 ./.venv/bin/python -m tests.frame_layout_check

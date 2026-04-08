@@ -13,7 +13,6 @@ to filter for specific log levels while keeping color coding.
 import os
 import sys
 import time
-import select
 import logging
 import threading
 from queue import Queue, Empty, Full
@@ -21,6 +20,11 @@ from datetime import datetime
 from typing import Dict
 import signal
 import atexit
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import select
 
 # import third party moduels
 import numpy as np
@@ -103,6 +107,7 @@ class SDRChatApp:
         self.tx_thread: threading.Thread = None
         self.tui_thread: threading.Thread = None
         self.tui_refresh_event: threading.Event = threading.Event()
+        self.input_buffer: str = ""
 
         # ================== Message queues for inter-thread communication ==================
         self.tx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))
@@ -261,6 +266,45 @@ class SDRChatApp:
         """Thread-safe method to request a static plot from any thread."""
         if self.debug_mode and hasattr(self, 'static_plot_signaler'):
             self.static_plot_signaler.plot_requested.emit(plot_data)
+
+    def _poll_user_input(self) -> str | None:
+        """Read one line of terminal input without blocking the whole UI loop."""
+        if os.name != "nt":
+            ready_to_read, _, _ = select.select([sys.stdin], [], [], 0.1)
+            if ready_to_read:
+                return sys.stdin.readline().strip()
+            return None
+
+        if not msvcrt.kbhit():
+            return None
+
+        while msvcrt.kbhit():
+            char = msvcrt.getwch()
+
+            if char in ("\r", "\n"):
+                completed = self.input_buffer
+                self.input_buffer = ""
+                print()
+                return completed.strip()
+
+            if char == "\003":
+                raise KeyboardInterrupt
+
+            if char == "\b":
+                if self.input_buffer:
+                    self.input_buffer = self.input_buffer[:-1]
+                    print("\b \b", end="", flush=True)
+                continue
+
+            if char in ("\x00", "\xe0"):
+                if msvcrt.kbhit():
+                    msvcrt.getwch()
+                continue
+
+            self.input_buffer += char
+            print(char, end="", flush=True)
+
+        return None
 
 
     # ================= Message Handling =================
@@ -548,14 +592,10 @@ class SDRChatApp:
         """TUI loop - continuously check for user input and enqueue messages to send."""
         logging.info("TUI loop started.")
 
-        self.tui.render_screen()  # Initial render of TUI
+        self.tui.render_screen(self.input_buffer)  # Initial render of TUI
 
         while not self.stop_event.is_set():
             try:
-
-                # Wait for either: screen refresh event OR stdin input (max 0.5s timeout)
-                ready_to_read, _, _ = select.select([sys.stdin], [], [], 0.1)
-                
                 if self.tui_refresh_event.is_set():
                     while not self.rx_queue.empty():
                         try:
@@ -572,17 +612,18 @@ class SDRChatApp:
 
                         if event_type == 'failed':
                             self.tui.mark_failed(msg_id)
-                    self.tui.render_screen()  # Update TUI display
+                    self.tui.render_screen(self.input_buffer)  # Update TUI display
                     self.tui_refresh_event.clear()  # Reset event
 
-                if ready_to_read:
-                    user_input = sys.stdin.readline().strip()
+                user_input = self._poll_user_input()
+                if user_input is not None:
                     if user_input.lower() == "/quit":
                         logging.info("User requested to quit. Stopping application...")
-                        self.running = False
+                        self.stop_event.set()
                         break
                     elif user_input.startswith("/"):
                         logging.warning(f"Unknown command: {user_input}")
+                        self.tui.render_screen(self.input_buffer)
                         continue  # Ignore unknown commands
 
                     # send message as datagram
@@ -598,7 +639,7 @@ class SDRChatApp:
                     datagram = Datagram.as_string(user_input, msg_type=msgType.DATA)
                     self.queue_datagram(datagram)
                     self.tui.add_message(datagram, is_local=True)  # Add sent message to TUI display
-                    self.tui.render_screen()  # Update TUI display after sending message
+                    self.tui.render_screen(self.input_buffer)  # Update TUI display after sending message
                     self.chat_history_log(f"Sent: [ID:{datagram.get_msg_id}]\t{sliced_user_input}")
 
         

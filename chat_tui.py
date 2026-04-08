@@ -82,14 +82,14 @@ class ChatTUI:
         else:
             self.mark_acknowledged(datagram.get_msg_id)
 
-    def render_screen(self):
+    def render_screen(self, current_input: str = ""):
         """Render the chat screen with current messages"""
         self._clear_screen()
         self._print_header()
         for msg in self.messages:
             print(msg)
         print('-' * 80)
-        print("> ", end="", flush=True)  # Prompt for user input
+        print(f"> {current_input}", end="", flush=True)  # Prompt for user input
 
 if __name__ == "__main__":
     # Example usage of ChatTUI

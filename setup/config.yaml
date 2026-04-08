@@ -2,9 +2,9 @@ logging:
   level: "INFO"                    # Shared repo log level. Supported: "DEBUG", "INFO", "WARNING", "ERROR".
 
 radio:
-  ip_address: "ip:192.168.0.151"      # ip address of sdr radio
+  ip_address: "ip:192.168.0.151"      # Connection of SDR: IP:"ip:192.168.0.151", USB: "usb:1.5.5"
   queue_size: 32                      # Maxsize of RX and TX queues. Also determines the max number of messages stored for display in the TUI.
-  debug_mode: True                    # If True, the system will run in debug mode with live plotting of signals.
+  debug_mode: false                    # If True, the system will run in debug mode with live plotting of signals.
 
 
 # These parameters are copies of the corresponding values in datagram.py.
@@ -43,7 +43,7 @@ receiver:
 
 modulation:
   type: "PSK"                        # Modulation type: "PSK" and "QAM"
-  order: 2                            # Modulation order: 2 for BPSK, 4 for QPSK, 16 for 16-QAM, etc. Must be a power of 2.
+  order: 4                            # Modulation order: 2 for BPSK, 4 for QPSK, 16 for 16-QAM, etc. Must be a power of 2.
   symbol_rate: 125e3                  # Symbols per second. symbol period = 1 / symbol_rate = 4 us
   samples_per_symbol: 8               # Samples per Symbol. Must be an integer. Determines the oversampling factor for pulse shaping and matched filtering.
   sample_rate: 1e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
