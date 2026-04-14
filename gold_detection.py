@@ -212,15 +212,26 @@ class GoldCodeDetector:
 
         for rotation, template in self.gold_symbols.items():
             scores = self._normalized_correlation_with_template(received_symbols, template)
-            p1, p2 = self._top_two_peaks_min_separation(
+            """ p1, p2 = self._top_two_peaks_min_separation(
                 scores=scores,
                 min_separation=self.code_length,
                 threshold=self.correlation_scale_factor_threshold,
             )
             if p1 is None or p2 is None:
                 continue
+            index, peak = p1 """
+            
+            ## Commented out code above to allow detection of single 
+            ## peaks when only one Gold code is present (e.g., only leading or only trailing).
+            if scores.size == 0:
+                continue
+            index = int(np.argmax(scores))
+            peak = float(scores[index])
+            if peak < self.correlation_scale_factor_threshold:
+                continue
+             ## Remove until here to revert to original behavior. 
 
-            index, peak = p1
+
             if peak > best_peak:
                 best_peak = peak
                 best_index = index
