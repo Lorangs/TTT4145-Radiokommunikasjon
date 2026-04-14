@@ -88,9 +88,10 @@ def modulation_rotations(modulation_name: str) -> tuple[complex, ...]:
     normalized = modulation_name.upper().strip()
     if normalized == "BPSK":
         return (1 + 0j, -1 + 0j)
-    if normalized == "QPSK":
+    elif normalized == "QPSK":
         return (1 + 1j, -1 - 1j, -1 -1j, 1 - 1j)
-    raise ValueError(f"Unsupported modulation type: {modulation_name}")
+    else:
+        raise ValueError(f"Unsupported modulation type: {modulation_name}")
 
 
 def upsample_symbols(symbols: np.ndarray, samples_per_symbol: int) -> np.ndarray:
@@ -98,6 +99,8 @@ def upsample_symbols(symbols: np.ndarray, samples_per_symbol: int) -> np.ndarray
     upsampled[::samples_per_symbol] = symbols.astype(np.complex64, copy=False)
     return upsampled
 
+def downsample_signal(signal: np.ndarray, samples_per_symbol: int) -> np.ndarray:
+    return signal[::samples_per_symbol]
 
 class ModulationProtocol:
     def __init__(self, config: dict):

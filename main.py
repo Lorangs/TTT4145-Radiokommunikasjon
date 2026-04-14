@@ -104,13 +104,20 @@ def _rx_loop():
 
             filtered_signal = matched_filter.apply_filter(coarse_freq_adjusted)
             normalized_matched_filtered = synchronizer.normalize_matched_filter_output(filtered_signal)
-            time_adjusted = synchronizer.gardner_timing_synchronization(filtered_signal)
+            time_adjusted = synchronizer.gardner_timing_synchronization(normalized_matched_filtered)
 
             fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
-            
-            gold_index = gold_detector.detect(fine_freq_adjusted)
-            ## Do the downsampling
 
+            gold_index, best_rotation = gold_detector.detect_with_rotation(fine_freq_adjusted)
+            if gold_index is None:
+                continue   # skip if gold code is not detected, likely not a valid signal to process
+            
+            rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, best_rotation)
+            frame_synched_signal = gold_detector.remove_gold_symbols(rotated_signal, gold_index)
+
+            # downsample to symbol rate for demodulation
+            downsampled_signal = frame_synched_signal[::SAMPLES_PER_SYMBOL]
+            
             # === Send data to plotter if debug mode is enabled ===
             if debug_mode and plotter is not None:
                 try:
@@ -122,15 +129,7 @@ def _rx_loop():
                     logging.error(f"Error sending data to plotter: {e}")
                     pass
             
-            if gold_index is None:
-                continue    # skip if gold code is not detected, likely not a valid signal to process
-          
-            received_symbols = gold_detector.remove_gold_symbols(
-                fine_freq_adjusted,
-                gold_index,
-            )
-
-            received_bits = modulation_protocol.demodulate_signal(received_symbols)
+            received_bits = modulation_protocol.demodulate_signal(downsampled_signal)
             conv_decoded_bits = conv_coder.decode(received_bits)
             deinterleaved_bits = interleaver.deinterleave(conv_decoded_bits)
             descrambled_bits = scrambler.apply(deinterleaved_bits)
@@ -536,6 +535,9 @@ if __name__ == "__main__":
     rx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for incoming messages received by the RX thread to be processed by the TUI thread
     pending_ack: list = []  # List to track pending ACKs with retry counts and datagram info
     pending_lock = threading.Lock()  # Lock to synchronize access to pending_ack
+
+    # Constants
+    SAMPLES_PER_SYMBOL = int(config['modulation']['samples_per_symbol'])
     MAX_RETRIES = int(config['datagram']['max_retries'])  # Maximum number of retransmission attempts for unacknowledged messages
     ACK_TIMEOUT_ms = float(config['datagram']['ack_timeout_ms'])  # Timeout for waiting for ACKs (converted to milliseconds
     GUARD_SYMBOLS = np.zeros(int(config['transmitter']['tx_guard_symbols']), dtype=np.complex64)  # Guard symbols to insert between packets
