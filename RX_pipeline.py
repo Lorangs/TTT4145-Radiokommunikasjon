@@ -1,13 +1,15 @@
+## Deprecated RX pipeline implementation, kept for reference and potential future reuse of components.
+
 from __future__ import annotations
 
 from dataclasses import dataclass
+from multiprocessing.util import get_logger
 
 import numpy as np
 
 from filter import BWLPFilter, RRCFilter
 from gold_detection import GoldCodeDetector, detect_gold_with_rotation
 from modulation import modulation_rotations, nearest_constellation_symbols
-from project_logger import get_logger
 from synchronize import Synchronizer
 
 logger = get_logger(__name__)

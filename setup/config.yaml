@@ -118,3 +118,9 @@ plotter:
   psd_scaling: 'density'           # PSD scaling type
   psd_max_points: 2048             # Max points in PSD plot
   multi_window: True                  # If True, use multiple windows for different plots. If False, use a single window with subplots.
+
+plot_capture:
+  enabled: true
+  output_dir: "artifacts/rf_plots"
+  save_tx_burst: true
+  save_rx_gold_detect: true

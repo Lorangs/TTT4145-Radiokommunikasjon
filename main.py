@@ -111,7 +111,35 @@ def _rx_loop():
             gold_index, best_rotation = gold_detector.detect_with_rotation(fine_freq_adjusted)
             if gold_index is None:
                 continue   # skip if gold code is not detected, likely not a valid signal to process
-            
+
+
+            # Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected    
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            capture_plot_if_enabled(
+                "rx_gold_detect",
+                "constellation",
+                fine_freq_adjusted,
+                title=f"RX Gold Detect Constellation {timestamp}",
+                stem=f"rx_gold_detect_constellation_{timestamp}",
+            )
+            capture_plot_if_enabled(
+                "rx_gold_detect",
+                "psd",
+                received_signal,
+                title=f"RX Gold Detect PSD {timestamp}",
+                stem=f"rx_gold_detect_psd_{timestamp}",
+                sample_rate=float(config["modulation"]["sample_rate"]),
+                center_freq=float(config["plotter"]["center_freq"]),
+            )
+            capture_plot_if_enabled(
+                "rx_gold_detect",
+                "eye",
+                normalized_matched_filtered,
+                title=f"RX Gold Detect Eye Diagram {timestamp}",
+                stem=f"rx_gold_detect_eye_{timestamp}",
+                samples_per_symbol=int(config["modulation"]["samples_per_symbol"]),
+            )
+
             rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, best_rotation)
             frame_synched_signal = gold_detector.remove_gold_symbols(rotated_signal, gold_index)
 
@@ -201,6 +229,25 @@ def _tx_loop():
                 filtered_signal = upsampled_signal  # Assume hardware filtering is applied by the SDR TODO: Not working as inteded
             else:
                 filtered_signal = matched_filter.apply_filter(upsampled_signal)
+
+            # Constellation and PSD plots when debug is enabled
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            capture_plot_if_enabled(
+                "tx_burst",
+                "constellation",
+                modulated_signal,
+                title=f"TX Burst Constellation {timestamp}",
+                stem=f"tx_burst_constellation_{timestamp}",
+            )
+            capture_plot_if_enabled(
+                "tx_burst",
+                "psd",
+                filtered_signal,
+                title=f"TX Burst PSD {timestamp}",
+                stem=f"tx_burst_psd_{timestamp}",
+                sample_rate=float(config["modulation"]["sample_rate"]),
+                center_freq=float(config["plotter"]["center_freq"]),
+            )
 
             if debug_mode:
                 logging.debug(f"TX loop got datagram from queue: {tx_datagram}")
@@ -446,27 +493,78 @@ def request_static_plot(plot_data: dict):
     if debug_mode and hasattr(static_plot_signaler, 'plot_requested'):
         static_plot_signaler.plot_requested.emit(plot_data)
 
+def capture_plot_if_enabled(
+    event_name: str,
+    plot_type: str,
+    data: np.ndarray,
+    title: str,
+    stem: str,
+    **extra,
+):
+    """Capture and save a plot if enabled in configuration."""
+    capture_cfg = config.get("plot_capture", {})
+
+    if not debug_mode or static_plotter is None:
+        return
+    if not capture_cfg.get("enabled", False):
+        return
+
+    if event_name == "tx_burst" and not capture_cfg.get("save_tx_burst", False):
+        return
+    if event_name == "rx_gold_detect" and not capture_cfg.get("save_rx_gold_detect", False):
+        return
+
+    plot_request = {
+        "type": plot_type,
+        "data": np.asarray(data).copy(),
+        "title": title,
+        "save": True,
+        "stem": stem,
+    }
+    plot_request.update(extra)
+    request_static_plot(plot_request)
+
 def _handle_static_plot(plot_data: dict):
     """Handle static plot request (runs in main thread)."""
     try:
         plot_type = plot_data.get('type')
         data = plot_data.get('data')
         title = plot_data.get('title', '')
-        
+        fig = None
+
         if plot_type == 'time_domain':
-            static_plotter.plot_time_domain(
+            fig = static_plotter.plot_time_domain(
                 data, 
-                float(config['modulation']['sample_rate']),
+                float(plot_data.get('sample_rate', config['modulation']['sample_rate'])),
                 title=title
             )
         elif plot_type == 'constellation':
-            static_plotter.plot_constellation(data, title=title)
+            fig = static_plotter.plot_constellation(data, title=title)
         elif plot_type == 'psd':
             sample_rate = float(plot_data.get('sample_rate', config['modulation']['sample_rate']))
             center_freq = float(plot_data.get('center_freq', config['plotter']['center_freq']))
-            static_plotter.plot_psd(data, sample_rate, center_freq=center_freq, title=title)
-        
-        show(block=False)
+            fig = static_plotter.plot_psd(data, sample_rate, center_freq=center_freq, title=title)
+        elif plot_type == 'eye':
+            fig = static_plotter.plot_eye_diagram(
+                data,
+                int(plot_data.get('samples_per_symbol', config['modulation']['samples_per_symbol'])),
+                title=title,
+            )
+
+        if fig is None:
+            return
+
+        if plot_data.get("save", False):
+            output_dir = config.get("plot_capture", {}).get("output_dir", "artifacts/rf_plots")
+            static_plotter.save_named_figure(
+                fig,
+                output_dir=output_dir,
+                stem=plot_data.get("stem", plot_type),
+                title=title,
+                close=True,
+            )
+        else:
+            show(block=False)
         
     except Exception as e:
         logging.error(f"Error handling static plot: {e}")

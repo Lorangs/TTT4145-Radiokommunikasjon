@@ -2,7 +2,6 @@ import numpy as np
 from scipy import signal
 from numba import njit
 
-from gold_code import get_gold_code_symbols
 from filter import RRCFilter
 from modulation import normalize_config_modulation_name
 
@@ -352,49 +351,12 @@ class Synchronizer:
         self.short_equalizer_min_training_symbols = int(
             sync_cfg.get("short_equalizer_min_training_symbols", 32)
         )
-        self.header_alignment_candidate_count = int(
-            sync_cfg.get("header_alignment_candidate_count", 4)
-        )
-        self.header_alignment_soft_enable = bool(
-            sync_cfg.get("header_alignment_soft_enable", True)
-        )
-        self.header_alignment_soft_phase_min_score = float(
-            sync_cfg.get("header_alignment_soft_phase_min_score", 0.25)
-        )
 
         print(f"Costas loop parameters: Kp={self.costas_Kp:.6f}, Ki={self.costas_Ki:.6f}")
         print(f"Gardner loop parameters: Kp={self.gardner_Kp:.6f}, Ki={self.gardner_Ki:.6f}")
         
         filter = RRCFilter(config)
         rc_filter = filter.rc_coefficients
-
-        gold_cfg = config["gold_sequence"]
-        threshold = gold_cfg.get(
-            "correlation_scale_factor_threshold",
-            gold_cfg.get("correlation_threshold", 0.7),
-        )
-        self.header_alignment_threshold = float(
-            sync_cfg.get("header_alignment_threshold", threshold)
-        )
-        self.base_gold_symbols = get_gold_code_symbols(
-            modulation_type=self.modulation_scheme,
-            code_length=int(gold_cfg["code_length"]),
-            code_index=int(gold_cfg.get("code_index", 0)),
-        ).astype(np.complex64)
-        
-        self.header_repeat_count = max(1, int(gold_cfg.get("header_repeat_count", 1)))
-        self.gold_symbols = np.tile(
-            self.base_gold_symbols,
-            self.header_repeat_count,
-        ).astype(np.complex64, copy=False)
-        
-        preamble_sequence = self.sync_preamble_symbols.copy()
-        preamble_sequence_upsampled = np.zeros(len(preamble_sequence) * self.sps, dtype=np.complex64)
-        preamble_sequence_upsampled[::self.sps] = preamble_sequence  
-        preamble_sequence = signal.convolve(preamble_sequence_upsampled, rc_filter, mode='same', method='fft')  # Apply pulse shaping to the preamble sequence
-
-        preamble_energy = np.sum(np.abs(preamble_sequence)**2)
-        self.preamble_sequence = preamble_sequence / np.sqrt(preamble_energy)  
 
         if self.modulation_scheme == 'BPSK':
             self.modulation_order = 2.0    
@@ -609,25 +571,6 @@ class Synchronizer:
             gate["update_start_sample"],
             gate["update_stop_sample"],
         )[0]
-
-    def time_synchronization(self, samples: np.ndarray) -> int:
-        """ ML timing synchronization algorithm. Searches for the known pattern in the received signal and estimates the timing offset."""
-        from matplotlib import pyplot as plt
-
-        correlation = signal.convolve(samples, self.preamble_sequence, mode='full', method='fft')
-
-        abs_correlation = np.abs(correlation)  # Normalize correlation to get a value between 0 and 1
-
-        max_value = np.max(abs_correlation)
-
-        plt.figure(figsize=(10, 4))
-        plt.stem(abs_correlation)
-        plt.title("Correlation with Gold Code Preamble")
-        plt.xlabel("Sample Index")
-        plt.ylabel("Absolute Correlation")
-        plt.grid()
-
-        return np.argmax(abs_correlation)  # Return the index of the maximum correlation as the estimated timing offset
 
 
 if __name__ == "__main__":
