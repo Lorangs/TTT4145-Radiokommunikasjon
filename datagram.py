@@ -152,7 +152,7 @@ class Datagram():
         payload = np.frombuffer(data, dtype=np.uint8)
         return cls(msg_id=msg_id, msg_type=msg_type, payload=payload)
 
-    def pack(self) -> bytes:
+    def pack(self) -> np.ndarray:
         """Pack datagram into a single numpy array of uint8."""
         padding_length = PAYLOAD_SIZE - int(self._payload_length)
         padded_payload = np.concatenate(
@@ -161,20 +161,20 @@ class Datagram():
                 np.full(padding_length, PAD_BYTE, dtype=np.uint8),
             )
         )
-        return (
-            bytes([self._msg_id]) +
-            bytes([self._msg_type.value]) +
-            self._timestamp_ms.tobytes() +
-            bytes([self._payload_length]) +
-            self._payload_crc16.tobytes() +
-            bytes(padded_payload)
-        )
+        return np.array([
+            self._msg_id,
+            self._msg_type.value,
+            *np.uint32(self._timestamp_ms).tobytes(),
+            self._payload_length,
+            *np.uint16(self._payload_crc16).tobytes(),
+            *padded_payload,
+        ], dtype=np.uint8)
 
     @classmethod
-    def unpack(cls, data: bytes) -> 'Datagram':
+    def unpack(cls, data: np.ndarray) -> 'Datagram':
         """Unpack datagram from a byte array.
         Args:
-            data (bytes): Byte array containing the packed datagram.
+            data (np.ndarray): Byte array containing the packed datagram.
         Returns:
             Datagram: Unpacked datagram object.
         Raises:
@@ -238,6 +238,11 @@ class Datagram():
     def get_payload(self) ->  np.ndarray:
         """Get payload data."""
         return self._payload
+    
+    @property
+    def get_payload_as_string(self, encoding: str = "utf-8", errors: str = "replace") -> str:
+        """Get payload data as a string."""
+        return self._payload.tobytes().decode(encoding, errors=errors)
 
     @property
     def get_payload_without_padding(self) -> np.ndarray:
@@ -301,7 +306,7 @@ if __name__ == "__main__":
     print(f"Original datagram: {datagram_str}")
 
     packed_data_str = datagram_str.pack()
-    print(f"Packed data: {packed_data_str.hex()}\n")
+    print(f"Packed data: {packed_data_str}\n")
 
     unpacked_datagram_str = Datagram.unpack(packed_data_str)
     print(f"Unpacked datagram ID: {unpacked_datagram_str.get_msg_id}")

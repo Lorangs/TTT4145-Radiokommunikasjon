@@ -111,12 +111,19 @@ def _rx_loop():
             coarse_freq_adjusted = synchronizer.coarse_frequenzy_synchronization(received_signal)
             if coarse_freq_adjusted is None:
                 continue    # skip if signal is too weak to process
+            #logging.debug("Signal detected above noise floor. Proceeding with synchronization and decoding.")
 
             filtered_signal = matched_filter.apply_filter(coarse_freq_adjusted)
+            #logging.debug("Applied matched filter to received signal.")
+
             normalized_matched_filtered = synchronizer.normalize_matched_filter_output(filtered_signal)
+            #logging.debug("Normalized matched filter output for synchronization.")
+
             time_adjusted = synchronizer.gardner_timing_synchronization(normalized_matched_filtered)
+            #logging.debug("Performed Gardner timing synchronization on received signal.")
 
             fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
+            #logging.debug("Performed fine frequency synchronization on received signal.")
 
             gold_index, best_rotation = gold_detector.detect_with_rotation(fine_freq_adjusted)
             
@@ -132,6 +139,7 @@ def _rx_loop():
                     pass
             
             if gold_index is None:
+                logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
                 continue   # skip if gold code is not detected, likely not a valid signal to process
 
             # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
@@ -266,6 +274,17 @@ def _tx_loop():
             filtered_signal = np.concatenate([GUARD_SYMBOLS, filtered_signal, GUARD_SYMBOLS])
 
             sdr.send_signal(filtered_signal)
+            logging.debug("Datagram length:\t %d bytes.", len(tx_datagram.pack()))
+            logging.debug("FEC coded data length:\t %d bytes.", len(fec_coded_data))
+            logging.debug("Scrambled data length:\t %d bytes.", len(scrambled_data))
+            logging.debug("Scrambled data (first 64 bytes):\t %s", scrambled_data[:64])  # Print first 64 bytes of scrambled data for debugging
+            logging.debug("Interleaved data length:\t %d bits.", len(interleaved_data))
+            logging.debug("Interleaved data:\t %s", interleaved_data[:64])  # Print first 64 bits of interleaved data for debugging
+            logging.debug("Conv coded data length:\t %d bits.", len(conv_coded_data))
+            logging.debug("Modulated signal length:\t %d samples.", len(modulated_signal))
+            logging.debug("Signal with Gold length:\t %d samples.", len(signal_with_gold))
+            logging.debug("Filtered signal length:\t %d samples.", len(filtered_signal))
+
             if tx_datagram.get_msg_type == msgType.DATA:
                 _track_sent_data(tx_datagram) 
             
@@ -719,7 +738,7 @@ if __name__ == "__main__":
             else:
                 # Headless mode main loop
                 while not stop_event.is_set():
-                    time.sleep(0.1)
+                    time.sleep(0.5)
 
         except KeyboardInterrupt:
             logging.info("KeyboardInterrupt received. Stopping application...")

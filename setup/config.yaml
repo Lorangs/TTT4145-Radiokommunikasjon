@@ -47,11 +47,12 @@ modulation:
 coding:
   rs_num_ecc: 32                       # For 32 ECC symbols, adds 128 bytes of redundancy to the origial message.
   interleaver_seed: 42                 # Seed for random interleaver. Must be the same for transmitter and receiver to ensure correct deinterleaving.
-  interleaver_length: 16             # Length of the interleaver. Must be the same for transmitter and receiver to ensure correct deinterleaving.
+  interleaver_length: 16               # Length of the interleaver. Must be the same for transmitter and receiver to ensure correct deinterleaving.
   convolutional_K: 7                   # Memory length (constraint length) for convolutional coding. Choices are 3, 5 or 7.
   convolutional_datarate: "1/4"        # Code rate for convolutional coding. Choices are "1/2", "1/3", "1/4".
   scrambler_seed: 0x5D                 # Non-zero seed for the scrambler LFSR. Must be the same for transmitter and receiver to ensure correct descrambling.
-  scrambler_register_length: 7         # 
+  scrambler_register_length: 8         # 
+  scrambler_taps: [0, 3]              # Taps for the scrambler LFSR. Example: [0, 3] for x^7 + x^4 + 1. Must be the same for transmitter and receiver to ensure correct scrambling/descrambling.
 
 filter:
   rrc_roll_off: 0.5                   # Roll-off factor (alpha) for pulse shaping filter
@@ -71,7 +72,7 @@ gold_sequence:
 synchronization:
   nfft: 16384                  # Higher FFT resolution reduces residual CFO before the fine loop, which matters more over the air.
   signal_bw: 1e6                  # Loop bandwidth for Costas loop in Hz. Determines how quickly the loop can track frequency and phase variations. A common choice is around 1-5% of the symbol rate, so for a symbol rate of 125 kHz, a bandwidth of 2500 Hz (2% of symbol rate) is a reasonable starting point. Adjust based on expected frequency offsets and noise conditions.
-  signal_power_threshold_dB: 1.0     # Threshold level above the measured noise floor in dB for considering a signal presence.
+  signal_power_threshold_dB: 66.3     # Threshold level above the measured noise floor in dB for considering a signal presence.
   costas_zeta: 0.707                     # Damping factor for Costas loop. A value of 0.707 (1/sqrt(2)) provides critical damping, which is a common choice for stable and responsive loop behavior. Adjust based on desired trade-off between stability and responsiveness.
   costas_K0: 1.0                         # VCO gain for costas loop.    
   costas_alpha: 0.02                    # Proportional gain for Costas loop (alternative to loop bandwidth). Adjust based on desired loop response. Ignored if costas_loop_bw is set.
