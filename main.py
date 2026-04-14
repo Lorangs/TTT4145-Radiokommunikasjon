@@ -58,6 +58,7 @@ def _find_pending_index(msg_id: int) -> int | None:
     return None
 
 def _track_sent_data(datagram: Datagram) -> None:
+    """Track sent DATA datagrams for potential retransmission if ACK is not received."""
     msg_id = int(datagram.get_msg_id)
     now_ms = time.time() * 1000.0
     with pending_lock:
@@ -69,6 +70,7 @@ def _track_sent_data(datagram: Datagram) -> None:
             pending_ack[idx] = (msg_id, retries, datagram, now_ms)
 
 def _ack_received(msg_id: int) -> None:
+    """Handle received ACK by removing the corresponding datagram from pending_ack."""
     with pending_lock:
         idx = _find_pending_index(msg_id)
         if idx is not None:
@@ -76,6 +78,7 @@ def _ack_received(msg_id: int) -> None:
 
 
 def _retransmit_oldest_pending() -> None:
+    """Retransmit the oldest pending datagram if any exist and have not exceeded max retries."""
     with pending_lock:
         if not pending_ack:
             return
@@ -189,7 +192,7 @@ def _rx_loop():
 
             # retransmit the previous sent message.
             elif received_datagram.get_msg_type == msgType.NACK:
-                logging.info(f"Received NACK for msg_ID: {received_datagram.get_msg_id}")
+                logging.info(f"Received NACK. Retransmitting oldest pending message if any.")
                 _retransmit_oldest_pending()
                 
             else:
@@ -262,14 +265,7 @@ def _tx_loop():
 
             sdr.send_signal(filtered_signal)
             if tx_datagram.get_msg_type == msgType.DATA:
-                with pending_lock:
-                    if _find_pending_index(int(tx_datagram.get_msg_id)) is None:
-                        pending_ack.append((
-                            int(tx_datagram.get_msg_id),
-                            0,  # retries
-                            tx_datagram,
-                            time.time() * 1000.0
-                        ))
+                _track_sent_data(tx_datagram) 
             
             time.sleep(0.1)  # Sleep briefly to allow SDR to process transmission
 
@@ -343,6 +339,7 @@ def _tui_loop():
     logging.info("TUI loop stopped.")
         
 def _ack_timeout_loop():
+    """ACK timeout loop - periodically check for pending ACKs and retransmit if necessary."""
     logging.info("ACK timeout loop started.")
 
     while not stop_event.is_set():
@@ -587,8 +584,41 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Error loading config file: {e}")
         raise e
+    
+    # Constants derived from configuration
+    SAMPLES_PER_SYMBOL = int(config['modulation']['samples_per_symbol'])
+    MAX_RETRIES = int(config['datagram']['max_retries'])  # Maximum number of retransmission attempts for unacknowledged messages
+    ACK_TIMEOUT_ms = float(config['datagram']['ack_timeout_ms'])  # Timeout for waiting for ACKs (converted to milliseconds
+    GUARD_SYMBOLS = np.zeros(int(config['transmitter']['tx_guard_symbols']), dtype=np.complex64)  # Guard symbols to insert between packets
 
-    # Optional imports for debug mode
+    # ================== Logging setup ==================
+    log_dir = "log"
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"{datetime.now().date()}-chat-history.txt")
+    debug_file = os.path.join(log_dir, f"{datetime.now().date()}-debug.log")
+    configure_project_logging(
+        level_name=get_configured_log_level(config),
+        session_name="debug",
+        log_file=debug_file,
+        console=True,
+        file_output=True,
+    )
+
+    try:
+        with open(log_file, 'a') as f:
+            f.write(f"\n\n--- New Chat Session Started at {datetime.now().time()} ---\n")
+    except Exception as e:
+        logging.error(f"Error initializing chat history log: {e}")
+        raise e
+    
+    # ================== Signal handlers for graceful shutdown ==================
+    atexit.register(_cleanup)
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+    logging.info("SDR Chat Application initialized successfully.")
+
+
+    # ====================== Optional imports for debug mode ========================
     if config.get('radio', {}).get('debug_mode', False):
         from sdr_plots import LiveSDRPlotter, LiveSDRPlotterMultiWindow, StaticSDRPlotter, StaticPlotSignaler
         from matplotlib.pyplot import show
@@ -634,31 +664,6 @@ if __name__ == "__main__":
     pending_ack: list[tuple[int, int, Datagram, float]] = []  
     pending_lock = threading.Lock()  # Lock to synchronize access to pending_ack
 
-    # Constants
-    SAMPLES_PER_SYMBOL = int(config['modulation']['samples_per_symbol'])
-    MAX_RETRIES = int(config['datagram']['max_retries'])  # Maximum number of retransmission attempts for unacknowledged messages
-    ACK_TIMEOUT_ms = float(config['datagram']['ack_timeout_ms'])  # Timeout for waiting for ACKs (converted to milliseconds
-    GUARD_SYMBOLS = np.zeros(int(config['transmitter']['tx_guard_symbols']), dtype=np.complex64)  # Guard symbols to insert between packets
-
-    # ================== Logging setup ==================
-    log_dir = "log"
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"{datetime.now().date()}-chat-history.txt")
-    debug_file = os.path.join(log_dir, f"{datetime.now().date()}-debug.log")
-    configure_project_logging(
-        level_name=get_configured_log_level(config),
-        session_name="debug",
-        log_file=debug_file,
-        console=True,
-        file_output=True,
-    )
-
-    try:
-        with open(log_file, 'a') as f:
-            f.write(f"\n\n--- New Chat Session Started at {datetime.now().time()} ---\n")
-    except Exception as e:
-        logging.error(f"Error initializing chat history log: {e}")
-        raise e
 
     # ================== Debug mode setup ==================
     debug_mode = bool(config['radio']['debug_mode'])
@@ -697,12 +702,6 @@ if __name__ == "__main__":
             logging.error(f"Failed to initialize live plotter: {e}")
             debug_mode = False
             plotter = None
-
-    atexit.register(_cleanup)
-    signal.signal(signal.SIGINT, _signal_handler)
-    signal.signal(signal.SIGTERM, _signal_handler)
-    logging.info("SDR Chat Application initialized successfully.")
-
 
     # ======================= start application =========================
     if start():

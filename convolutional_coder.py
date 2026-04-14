@@ -27,14 +27,14 @@ class ConvolutionalCoder:
         
     def encode(self, input_bits: np.ndarray, ramp_down: bool = True) -> np.ndarray:
         """Encode input bits using a convolutional code with datarate 1/4."""
-        if not self.use_numba:
-            return _encode.py_func(input_bits, self.GENERATOR, self.K, self.n, ramp_down)
+        #if not self.use_numba:
+        #    return _encode.py_func(input_bits, self.GENERATOR, self.K, self.n, ramp_down)
         return _encode(input_bits, self.GENERATOR, self.K, self.n, ramp_down)
     
     def decode(self, received_bits: np.ndarray, ramp_down: bool = True) -> np.ndarray:
         """Decode received bits using the Viterbi algorithm with hard decision."""
-        if not self.use_numba:
-            return _viterbi_decode_hard.py_func(received_bits, self.GENERATOR, self.K, self.n, ramp_down)
+        #if not self.use_numba:
+        #    return _viterbi_decode_hard_py_func(received_bits, self.GENERATOR, self.K, self.n, ramp_down)
         return _viterbi_decode_hard(received_bits, self.GENERATOR, self.K, self.n, ramp_down)
     
 
