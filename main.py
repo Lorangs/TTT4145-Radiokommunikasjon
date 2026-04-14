@@ -119,11 +119,22 @@ def _rx_loop():
             fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
 
             gold_index, best_rotation = gold_detector.detect_with_rotation(fine_freq_adjusted)
+            
+            # === Send data to plotter if debug mode is enabled ===
+            if debug_mode and plotter is not None:
+                try:
+                    # Non-blocking put - drop if queue is full
+                    plot_data_queue.put_nowait(fine_freq_adjusted.copy())
+                except Full:
+                    pass  # Drop frame if plotter can't keep up
+                except Exception as e:
+                    logging.error(f"Error sending data to plotter: {e}")
+                    pass
+            
             if gold_index is None:
                 continue   # skip if gold code is not detected, likely not a valid signal to process
 
-
-            # Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected    
+            # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             capture_plot_if_enabled(
                 "rx_gold_detect",
@@ -153,16 +164,7 @@ def _rx_loop():
             rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, best_rotation)
             frame_synched_signal = gold_detector.remove_gold_symbols(rotated_signal, gold_index)
             
-            # === Send data to plotter if debug mode is enabled ===
-            if debug_mode and plotter is not None:
-                try:
-                    # Non-blocking put - drop if queue is full
-                    plot_data_queue.put_nowait(fine_freq_adjusted.copy())
-                except Full:
-                    pass  # Drop frame if plotter can't keep up
-                except Exception as e:
-                    logging.error(f"Error sending data to plotter: {e}")
-                    pass
+
             
             received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
             conv_decoded_bits = conv_coder.decode(received_bits)
