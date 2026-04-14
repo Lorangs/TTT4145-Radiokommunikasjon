@@ -1,9 +1,6 @@
 """
 To display logging file in a terminal with color coding, use the following command:
-tail -f log/$(date +%Y-%m-%d)-debug.log
-
-optionally pipe with grep:
-| grep --color=always "ERROR\\|WARNING\\|INFO\\|DEBUG"
+tail -f log/$(date +%Y-%m-%d)-debug.logINGWARNING\\|INFO\\|DEBUG"
 
 to filter for specific log levels while keeping color coding.
 
@@ -53,39 +50,48 @@ def queue_datagram(datagram: Datagram) -> bool:
         logging.error(f"Failed to queue datagram ID {datagram.get_msg_id}. TX queue is full.")
         return False
 
+def _find_pending_index(msg_id: int) -> int | None:
+    for i, (pending_msg_id, _, _, _) in enumerate(pending_ack):
+        if pending_msg_id == msg_id:
+            return i
+    return None
+
 def _track_sent_data(datagram: Datagram) -> None:
     msg_id = int(datagram.get_msg_id)
     now_ms = time.time() * 1000.0
     with pending_lock:
-        # insert once; keeps original insertion order
-        if msg_id not in pending_ack:
-            pending_ack[msg_id] = {
-                "datagram": datagram,
-                "retries": 0,
-                "last_sent_ms": now_ms,
-            }
+        idx = _find_pending_index(msg_id)
+        if idx is None:
+            pending_ack.append((msg_id, 0, datagram, now_ms))
         else:
-            # do not reinsert key (keeps FIFO order)
-            pending_ack[msg_id]["last_sent_ms"] = now_ms
+            _, retries, _, _ = pending_ack[idx]
+            pending_ack[idx] = (msg_id, retries, datagram, now_ms)
 
 def _ack_received(msg_id: int) -> None:
     with pending_lock:
-        pending_ack.pop(msg_id, None)
+        idx = _find_pending_index(msg_id)
+        if idx is not None:
+            pending_ack.pop(idx)
+
 
 def _retransmit_oldest_pending() -> None:
     with pending_lock:
         if not pending_ack:
             return
-        oldest_msg_id = next(iter(pending_ack))  # first inserted key
-        entry = pending_ack[oldest_msg_id]
-        dgram = entry["datagram"]
-        if entry["retries"] >= MAX_RETRIES:
-            logging.warning(f"Max retries reached for datagram ID {oldest_msg_id}. Giving up.")
-            pending_ack.pop(oldest_msg_id, None)
-            return
-        entry["retries"] += 1
 
-    queue_datagram(dgram)  # Re-enqueue for retransmission
+        # oldest = smallest last_sent_ms
+        oldest_idx = min(range(len(pending_ack)), key=lambda i: pending_ack[i][3])
+        msg_id, retries, dgram, _ = pending_ack[oldest_idx]
+
+        if retries >= MAX_RETRIES:
+            logging.warning(f"Max retries reached for datagram ID {msg_id}. Giving up.")
+            pending_ack.pop(oldest_idx)
+            return
+
+        now_ms = time.time() * 1000.0
+        pending_ack[oldest_idx] = (msg_id, retries + 1, dgram, now_ms)
+
+    queue_datagram(dgram)
 
 ##############################################################################################
 # ================= Callback loops for threads =================
@@ -116,7 +122,7 @@ def _rx_loop():
             frame_synched_signal = gold_detector.remove_gold_symbols(rotated_signal, gold_index)
 
             # downsample to symbol rate for demodulation
-            downsampled_signal = frame_synched_signal[::SAMPLES_PER_SYMBOL]
+            downsampled_signal = modulation_protocol.downsample_signal(frame_synched_signal)
             
             # === Send data to plotter if debug mode is enabled ===
             if debug_mode and plotter is not None:
@@ -191,7 +197,8 @@ def _tx_loop():
 
             fec_coded_data = fec_codec.encode(tx_datagram.pack())
             scrambled_data = scrambler.apply(fec_coded_data)
-            interleaved_data = interleaver.interleave(scrambled_data)
+            bit_stream = np.unpackbits(scrambled_data)
+            interleaved_data = interleaver.interleave(bit_stream)
             conv_coded_data = conv_coder.encode(interleaved_data)
             modulated_signal = modulation_protocol.modulate_message(conv_coded_data)
             signal_with_gold = gold_detector.add_gold_symbols(modulated_signal)
@@ -211,7 +218,12 @@ def _tx_loop():
             sdr.send_signal(filtered_signal)
             if tx_datagram.get_msg_type == msgType.DATA:
                 with pending_lock:
-                    pending_ack.append(tx_datagram)
+                    pending_ack.append((
+                        int(tx_datagram.get_msg_id),
+                        0,  # retries
+                        tx_datagram,
+                        time.time() * 1000.0
+                    ))
             
             time.sleep(0.1)  # Sleep briefly to allow SDR to process transmission
 
@@ -290,38 +302,35 @@ def _ack_timeout_loop():
 
     while not stop_event.is_set():
         now_ms = time.time() * 1000.0
-        timed_out_msg_ids = []
+        to_retransmit: list[tuple[int, Datagram, int]] = []
+        to_remove: list[int] = []
 
         with pending_lock:
-            for msg_id, entry in pending_ack.items():
-                if (now_ms - float(entry["last_sent_ms"])) > ACK_TIMEOUT_ms:
-                    timed_out_msg_ids.append(msg_id)
-
-        for msg_id in timed_out_msg_ids:
-            with pending_lock:
-                entry = pending_ack.get(msg_id)
-                if entry is None:
+            for i, (msg_id, retries, dgram, last_sent_ms) in enumerate(pending_ack):
+                if (now_ms - last_sent_ms) <= ACK_TIMEOUT_ms:
                     continue
 
-                if entry["retries"] >= MAX_RETRIES:
+                if retries >= MAX_RETRIES:
                     logging.warning(f"Max retries reached for datagram ID {msg_id}. Giving up.")
-                    pending_ack.pop(msg_id, None)
+                    to_remove.append(i)
                     continue
 
-                entry["retries"] += 1
-                entry["last_sent_ms"] = now_ms
-                dgram = entry["datagram"]
+                pending_ack[i] = (msg_id, retries + 1, dgram, now_ms)
+                to_retransmit.append((msg_id, dgram, retries + 1))
 
+            for i in reversed(to_remove):
+                pending_ack.pop(i)
+
+        for msg_id, dgram, retry_count in to_retransmit:
             try:
                 tx_queue.put_nowait(dgram)
-                logging.info(f"Timeout retransmit for datagram ID {msg_id} (retry {entry['retries']}).")
+                logging.info(f"Timeout retransmit for datagram ID {msg_id} (retry {retry_count}).")
             except Full:
                 logging.warning(f"TX queue full. Could not retransmit datagram ID {msg_id}.")
 
         time.sleep(max(0.05, ACK_TIMEOUT_ms / 1000.0 / 2.0))
 
     logging.info("ACK timeout loop stopped.")
-# ...existing code...
 
 
 # ================= Start and Stop of sub threads =================
@@ -523,7 +532,10 @@ if __name__ == "__main__":
     # ================== Message queues for inter-thread communication ==================
     tx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for outgoing messages to be transmitted by the TX thread
     rx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for incoming messages received by the RX thread to be processed by the TUI thread
-    pending_ack: list = []  # List to track pending ACKs with retry counts and datagram info
+    
+    # List to track pending ACKs with retry counts and datagram info. 
+    # (msg_id, retry_count, datagram, last_sent_ms)
+    pending_ack: list[tuple[int, int, Datagram, float]] = []  
     pending_lock = threading.Lock()  # Lock to synchronize access to pending_ack
 
     # Constants

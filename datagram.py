@@ -293,13 +293,22 @@ if __name__ == "__main__":
     # Example usage
     #payload = np.array([1, 2, 3, 4], dtype=np.uint8)
     test_msg = "Hello, World!"
-    payload = np.frombuffer(test_msg.encode('utf-8'), dtype=np.uint8)
-    datagram = Datagram(msg_type=msgType.DATA, payload=payload)
-    print(f"Original datagram: {datagram}")
+    payload_str = np.frombuffer(test_msg.encode('utf-8'), dtype=np.uint8)
+    payload_byte = np.frombuffer(b'\xDE\xAD\xBE\xEF', dtype=np.uint8)
+    
 
-    packed_data = datagram.pack()
-    print(f"Packed data: {packed_data.hex()}\n")
+    datagram_str = Datagram(msg_type=msgType.DATA, payload=payload_str)
+    print(f"Original datagram: {datagram_str}")
 
-    unpacked_datagram = Datagram.unpack(packed_data)
-    print(f"Unpacked datagram ID: {unpacked_datagram.get_msg_id}")
-    print(f"Unpacked datagram: {unpacked_datagram}")
+    packed_data_str = datagram_str.pack()
+    print(f"Packed data: {packed_data_str.hex()}\n")
+
+    unpacked_datagram_str = Datagram.unpack(packed_data_str)
+    print(f"Unpacked datagram ID: {unpacked_datagram_str.get_msg_id}")
+    print(f"Unpacked datagram: {unpacked_datagram_str}")
+
+    datagram_byte = Datagram(msg_type=msgType.DATA, payload=payload_byte)
+    print(f"Original datagram: {datagram_byte}")
+    
+    unpacked_datagram_byte = Datagram.unpack(datagram_byte.pack())
+    print(f"Unpacked datagram: {unpacked_datagram_byte}")

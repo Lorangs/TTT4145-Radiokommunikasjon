@@ -7,6 +7,8 @@ ensure only one bit transition per symbol change
 
 import numpy as np
 import numba 
+from project_logger import get_logger
+logger = get_logger(__name__)
 
 
 class ConvolutionalCoder:

@@ -10,9 +10,10 @@ pairs below in this LFSR convention.
 """
 
 from __future__ import annotations
-
 import numpy as np
 
+from project_logger import get_logger
+logger = get_logger(__name__)
 
 # Preferred-pair taps for the Fibonacci LFSR convention used in this project.
 # Each tap tuple lists positions counted from the output end: state[-tap].
