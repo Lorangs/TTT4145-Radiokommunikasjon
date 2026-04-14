@@ -66,13 +66,29 @@ class GoldCodeDetector:
 
     def remove_gold_symbols(self, signal: np.ndarray, start_index: int) -> np.ndarray:
         """Remove the Gold code from the symbol stream starting at start_index.
-            Removes only the leading Gold code, assuming the trailing one is after the payload. 
-            Caller should ensure start_index is valid and that the trailing Gold code is not needed before the returned payload.
+            Removes the leading Gold code and, when detected, strips the trailing
+            Gold code as well so only the payload remains.
         """
-        if start_index < 0 or (start_index + self.code_length) > len(signal):
+        received = np.asarray(signal).astype(np.complex64, copy=False)
+
+        if start_index < 0 or (start_index + self.code_length) > len(received):
             logger.warning("Invalid start index for removing Gold code.")
-            return signal
-        return signal[start_index + self.code_length :]
+            return received
+
+        payload_start = int(start_index + self.code_length)
+        payload_stop = int(received.size)
+
+        tail = received[payload_start:]
+        scores = self.normalized_correlation(tail)
+        candidate_indices = np.flatnonzero(scores >= self.correlation_scale_factor_threshold)
+        if candidate_indices.size > 0:
+            payload_stop = payload_start + int(candidate_indices[-1])
+
+        if payload_stop < payload_start:
+            logger.warning("Detected trailing Gold sequence before payload start.")
+            payload_stop = payload_start
+
+        return received[payload_start:payload_stop]
 
     def normalized_correlation(self, received_signal: np.ndarray) -> np.ndarray:
         """Compute the normalized correlation between the received signal and the Gold code."""
