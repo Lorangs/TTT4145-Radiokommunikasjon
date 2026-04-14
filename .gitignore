@@ -8,8 +8,10 @@ Channel_Simulator/*
 # ignore all backup files
 *.backup
 
-# ignore logs
+# ignore logs and plots
 log/*
+artifacts/*
+
 
 # ignore initial test files
 initial_tests/*

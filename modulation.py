@@ -91,7 +91,7 @@ def modulation_rotations(modulation_name: str) -> tuple[complex, ...]:
     if normalized == "BPSK":
         return (1 + 0j, -1 + 0j)
     elif normalized == "QPSK":
-        return (1 + 1j, -1 - 1j, -1 -1j, 1 - 1j)
+        return (1 + 1j, -1 + 1j, -1 - 1j, 1 - 1j)
     else:
         raise ValueError(f"Unsupported modulation type: {modulation_name}")
 
@@ -105,8 +105,8 @@ class ModulationProtocol:
         self.modulation_type = normalize_modulation_name(raw_type, self.modulation_order)
         self.samples_per_symbol = int(config["modulation"]["samples_per_symbol"])
         
-        if raw_type == "PSK":
-            self.modulator = commpy_modulation.PSKModem(self.modulation_order)
+        if self.modulation_type in {"BPSK", "QPSK"}:
+            self.modulator = None
         elif raw_type == "QAM":
             self.modulator = commpy_modulation.QAMModem(self.modulation_order)
         else:
@@ -114,11 +114,27 @@ class ModulationProtocol:
 
     def modulate_message(self, bit_stream: np.ndarray) -> np.ndarray:
         """Modulate a bit stream into a complex baseband signal."""
-        return self.modulator.modulate(bit_stream)
+        bit_stream = np.asarray(bit_stream, dtype=np.uint8)
+
+        if self.modulation_type in {"BPSK", "QPSK"}:
+            return bits_to_symbols(bit_stream, self.modulation_type)
+
+        if self.modulator is not None:
+            return self.modulator.modulate(bit_stream)
+
+        raise ValueError(f"Unsupported modulation type: {self.modulation_type}")
 
     def demodulate_signal(self, signal: np.ndarray) -> np.ndarray:
         """Demodulate a complex baseband signal back into a bit stream."""
-        return self.modulator.demodulate(signal, demod_type="hard")
+        signal = np.asarray(signal).astype(np.complex64, copy=False)
+
+        if self.modulation_type in {"BPSK", "QPSK"}:
+            return symbols_to_bits(signal, self.modulation_type)
+
+        if self.modulator is not None:
+            return self.modulator.demodulate(signal, demod_type="hard")
+
+        raise ValueError(f"Unsupported modulation type: {self.modulation_type}")
 
 
     def upsample_symbols(self, symbols: np.ndarray) -> np.ndarray:

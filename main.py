@@ -149,9 +149,6 @@ def _rx_loop():
 
             rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, best_rotation)
             frame_synched_signal = gold_detector.remove_gold_symbols(rotated_signal, gold_index)
-
-            # downsample to symbol rate for demodulation
-            downsampled_signal = modulation_protocol.downsample_signal(frame_synched_signal)
             
             # === Send data to plotter if debug mode is enabled ===
             if debug_mode and plotter is not None:
@@ -164,7 +161,7 @@ def _rx_loop():
                     logging.error(f"Error sending data to plotter: {e}")
                     pass
             
-            received_bits = modulation_protocol.demodulate_signal(downsampled_signal)
+            received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
             conv_decoded_bits = conv_coder.decode(received_bits)
             deinterleaved_bits = interleaver.deinterleave(conv_decoded_bits)
             descrambled_bits = scrambler.apply(deinterleaved_bits)
