@@ -360,6 +360,7 @@ def _costas_loop_njit(received_signal: np.ndarray,
 
 class Synchronizer:
     def __init__(self, config: dict, warmup: bool = True, use_numba: bool = True):
+        """ Synchronization class that handles both coarse and fine frequency synchronization, as well as timing synchronization using a Costas loop and Gardner algorithm. Configurable via the provided config dictionary."""
         self.modulation_scheme = normalize_config_modulation_name(config)
         self.sps = int(config['modulation']['samples_per_symbol'])
         self.symbol_rate = int(float(config['modulation']['symbol_rate']))
@@ -559,14 +560,16 @@ class Synchronizer:
         self,
         samples: np.ndarray,
         target_rms: float = 1.0,
-    ) -> tuple[np.ndarray, dict]:
+    ) -> np.ndarray:
         received = np.asarray(samples).astype(np.complex64, copy=False)
         if received.size == 0:
-            return received, {
-                "rms_before": 0.0,
-                "scale": 1.0,
-                "selected_samples": 0,
-            }
+            return received
+
+        energy = np.abs(received) ** 2
+        threshold = float(np.percentile(energy, 65.0))
+        selected = energy >= threshold
+        if not np.any(selected):
+            selected = np.ones(received.size, dtype=bool)
 
         energy = np.abs(received) ** 2
         threshold = float(np.percentile(energy, 65.0))
@@ -578,11 +581,7 @@ class Synchronizer:
         scale = 1.0 if rms_before <= 1e-12 else float(target_rms) / rms_before
         normalized = (received * scale).astype(np.complex64, copy=False)
 
-        return normalized, {
-            "rms_before": rms_before,
-            "scale": scale,
-            "selected_samples": int(np.count_nonzero(selected)),
-        }
+        return normalized
 
     
     def fine_frequenzy_synchronization(
@@ -624,9 +623,9 @@ class Synchronizer:
         self,
         received_signal: np.ndarray,
         update_start_symbol: int = 0,
-        update_stop_symbol: int | None = None,
+        update_stop_symbol: int | None = None
     ) -> tuple[np.ndarray, dict]:
-        """Fine frequency synchronization plus loop diagnostics."""
+        """Fine frequency synchronization plus loop diagnostics for plotting and debug"""
         stop_symbol = len(received_signal) if update_stop_symbol is None else int(update_stop_symbol)
         gate_min_power, gate_max_power, power_reference = self._costas_power_gate(
             received_signal,
@@ -1448,6 +1447,7 @@ class Synchronizer:
         update_start_sample: int = 0,
         update_stop_sample: int | None = None,
     ) -> np.ndarray:
+        """Timing synchronization using the Gardner algorithm."""
         gate = self._gardner_gate_parameters(
             samples,
             update_start_sample=update_start_sample,

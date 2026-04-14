@@ -103,7 +103,11 @@ def _rx_loop():
                 continue    # skip if signal is too weak to process
 
             filtered_signal = matched_filter.apply_filter(coarse_freq_adjusted)
+            normalized_matched_filtered = synchronizer.normalize_matched_filter_output(filtered_signal)
             time_adjusted = synchronizer.gardner_timing_synchronization(filtered_signal)
+
+            header_preroll_symbols = min(int(guard_symbols), 2)
+
             fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
 
             gold_index = gold_detector.detect(fine_freq_adjusted)
