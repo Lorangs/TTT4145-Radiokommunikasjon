@@ -11,16 +11,16 @@ radio:
 # They are duplicated here to keep all configurable parameters in one place,
 # but they must be kept consistent with the definitions in datagram.py for the system to function correctly.
 datagram:
-  ack_timeout_ms: 2000
-  max_retries: 3
   msg_id_size: 1
   msg_type_size: 1
   timestamp_size: 4
   payload_length_size: 1
-  payload_crc_size: 2
+  crc16_size: 2
   payload_size: 247              # Maximum number of bytes in a datagram. Adjust based on expected message sizes and memory constraints.
   header_size: 9                # Total size of the datagram header (msg_id + msg_type + timestamp + payload_length + payload_crc). Must be <= 255 to fit in a single byte length field.
   total_size: 256              # Total size of the datagram (header + payload + CRC). Must be <= 255 to fit in a single byte length field.
+  pad_byte: 0x00                # Byte value used for padding the payload to the fixed payload size. Must be a single byte value (0-255).
+
 
 reliability:
   ack_timeout_seconds: 1.5            # Time to wait for an ACK before retransmitting the same DATA datagram.
@@ -31,13 +31,13 @@ transmitter:
   tx_cyclic_buffer: False             # Enable/disable cyclic buffer
   tx_gain_dB: 0                     # range: -90 to 0 dB
   tx_bandwidth: 1e6                   # TX bandwidth [Hz]
-  tx_carrier: 866.5e6                 # TX local oscillator (carrier frequenzy)
+  tx_carrier: 868e6                 # TX local oscillator (carrier frequenzy)
   tx_buffer_size: 1024                # 2**10 samples 
 
 receiver: 
   rx_gain_dB: 6                     # range: 0 to 73 dB
   rx_bandwidth: 500e3                 # RX bandwidth [Hz]
-  rx_carrier: 866.5e6                 # RX local oscillator (carrier frequenzy)
+  rx_carrier: 864e6                 # RX local oscillator (carrier frequenzy)
   gain_mode: 'manual'                 # "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
   buffer_size: 262144                  # 2**18 samples      
 

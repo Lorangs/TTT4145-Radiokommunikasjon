@@ -19,6 +19,7 @@ from queue import Queue, Empty, Full
 from datetime import datetime
 from typing import Dict
 import signal
+
 import atexit
 
 if os.name == "nt":
@@ -631,12 +632,12 @@ class SDRChatApp:
                         continue  # Ignore unknown commands
 
                     # send message as datagram
-                    while len(user_input.encode('utf-8')) > Datagram.PAYLOAD_SIZE:
+                    while len(user_input.encode('utf-8')) > self.config['datagram']['payload_size']:
                         logging.warning("Input message is too long and will be truncated to fit payload size.")
-                        sliced_user_input = user_input[: Datagram.PAYLOAD_SIZE]
+                        sliced_user_input = user_input[: config['datagram']['payload_size']]
                         datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
                         self.queue_datagram(datagram)
-                        user_input = user_input[Datagram.PAYLOAD_SIZE :]  # Remove the part that was sent
+                        user_input = user_input[self.config['datagram']['payload_size'] :]  # Remove the part that was sent
                    
                     # Final slice (or if input was already short enough)
                     sliced_user_input = user_input
