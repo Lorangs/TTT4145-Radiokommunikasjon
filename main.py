@@ -13,8 +13,8 @@ to filter for specific log levels while keeping color coding.
 import os
 import sys
 import time
-import select
 import logging
+import select
 import threading
 from queue import Queue, Empty, Full
 from datetime import datetime
@@ -276,7 +276,6 @@ def _tui_loop():
                 queue_datagram(datagram)
                 tui.add_message(datagram)  # Add sent message to TUI display
                 tui.render_screen()  # Update TUI display after sending message
-                chat_history_log(f"Sent: [ID:{datagram.get_msg_id}]\t{sliced_user_input}")
     
         except Exception as e:
             logging.error(f"Error in TUI loop: {e}")
@@ -437,15 +436,6 @@ def _cleanup():
     logging.info("Cleanup completed successfully.")
 
 
-# ==================================Logging ======================================
-#def chat_history_log(message: str):
-#    """Append a message to the chat history log file."""
-#    try:
-#        with open(log_file, 'a') as f:
-#            f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} - {message}\n")
-#    except Exception as e:
-#        logging.error(f"Error writing to chat history log: {e}")
-#
 
 
 ##################################################################################
