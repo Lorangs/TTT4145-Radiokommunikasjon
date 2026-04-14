@@ -28,6 +28,7 @@ transmitter:
   tx_bandwidth: 1e6                   # TX bandwidth [Hz]
   tx_carrier: 866.5e6                 # TX local oscillator (carrier frequenzy)
   tx_buffer_size: 1024                # 2**10 samples 
+  tx_guard_symbols: 32                # Number of guard symbols (idle time) to insert between packets. Adjust based on expected channel conditions and timing requirements. More guard symbols can help with timing acquisition and reduce inter-packet interference, but also increase overhead.
 
 receiver: 
   rx_gain_dB: 6                     # range: 0 to 73 dB
@@ -57,9 +58,6 @@ filter:
   rrc_filter_scale_factor: 1          # (2**15-1) Scale factor for RRC filter coefficients to fit within int16 range for hardware filtering.
   hardware_filter_enable: False        # Enable/disable hardware RRC filtering on the SDR. If False, RRC filtering is done in software.
   hardware_filter_file: "rrc_filter_coefficients.ftr"  # File to store RRC filter coefficients for hardware filtering. Only used if rrc_filtering_enable is True.
-  butterworth_enable: false           # 
-  butterworth_order: 4                # Rolloff order 
-  butterworth_cutoff_hz: 140e9        # Cutoff Freq. Adjust as needed 
 
 gold_sequence:
   code_length: 31                    # Supported lengths follow the implemented Gold-code families.
@@ -86,11 +84,6 @@ synchronization:
   gardner_gate_energy_percentile_high: 90.0  # Upper energy percentile used for Gardner update gating.
   gardner_gate_energy_scale_low: 3.0        # Scale factor applied to the lower Gardner gate percentile.
   gardner_gate_energy_scale_high: 3.0       # Scale factor applied to the upper Gardner gate percentile.
-  burst_crop_enable: false                   # If true, crop the RX buffer around the strongest burst candidate before synchronization.
-  burst_crop_margin_symbols: 10             # Extra symbols kept on each side of the burst crop. The previous implicit default was one filter span.
-  burst_crop_window_scale: 1.0              # Multiplier applied to the expected TX burst length when forming the burst-energy crop window.
-  burst_crop_min_expected_fraction: 0.9     # If the cropped region is shorter than this fraction of the expected TX burst, fall back to the full RX buffer.
-  burst_crop_allow_full_buffer_fallback: true  # If true, ignore an obviously too-short crop and retry sync on the full RX buffer instead.
   header_phase_search_offset_samples: 4     # Search radius, in matched-filter samples, around the detected header start during timing acquisition.
   preamble_repeat_count: 12                 # Number of repeated short Gold-code blocks sent before the repeated Gold header for direct timing/CFO acquisition.
   timing_preamble_block_symbols: 31         # Length of the timing-friendly alternating BPSK acquisition block before repetition.
@@ -103,15 +96,9 @@ synchronization:
   header_fractional_timing_step_samples: 0.25  # Step size, in matched-filter samples, for header-driven fractional timing refinement.
   preamble_cfo_max_abs_slope_rad_per_symbol: 0.05  # Clamp preamble-estimated phase slope to avoid over-correcting noisy captures.
   header_alignment_candidate_count: 4       # Number of strongest preamble-alignment candidates to rescore before choosing the packet start.
-  header_alignment_soft_enable: false       # Disabled by default: the current stable regime did not need soft alignment, and the lone weak-start case still failed downstream.
-  header_alignment_soft_phase_min_score: 0.25  # Minimum preamble phase/coherence score required to use soft header alignment.
   timing_header_search_radius_symbols: 8    # Symbol-domain search radius used for header slip correction and Gold search around the expected header index after timing recovery.
   timing_header_candidate_count: 5          # Number of nearby symbol-domain Gold candidates to rank for final decode attempts.
   gardner_tracking_payload_symbols: 64      # Number of payload symbols Gardner is allowed to track after the header before holding timing fixed.
-  header_carrier_branch_selection_enable: false  # Disabled by default while slope correction stays off; this keeps the active path explicit instead of evaluating an unused branch.
-  header_carrier_apply_slope_enable: false  # Apply the header-estimated phase slope before Costas when the estimate looks trustworthy.
-  header_carrier_slope_min_score: 0.55      # Minimum header carrier score required before applying the phase slope estimate.
-  header_carrier_max_abs_slope_rad_per_symbol: 0.05  # Clamp the pre-Costas phase slope correction to avoid over-rotation on noisy estimates.
   short_equalizer_enable: true              # Train a short symbol-rate equalizer on the known preamble/header before Costas to reduce residual ISI.
   short_equalizer_tap_count: 5              # Odd tap count for the short trained equalizer.
   short_equalizer_regularization: 1.0e-3    # Ridge regularization used when solving the equalizer taps.

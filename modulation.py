@@ -89,7 +89,7 @@ def modulation_rotations(modulation_name: str) -> tuple[complex, ...]:
     if normalized == "BPSK":
         return (1 + 0j, -1 + 0j)
     if normalized == "QPSK":
-        return (1 + 0j, -1 + 0j, 1j, -1j)
+        return (1 + 1j, -1 - 1j, -1 -1j, 1 - 1j)
     raise ValueError(f"Unsupported modulation type: {modulation_name}")
 
 

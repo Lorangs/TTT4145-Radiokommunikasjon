@@ -106,10 +106,8 @@ def _rx_loop():
             normalized_matched_filtered = synchronizer.normalize_matched_filter_output(filtered_signal)
             time_adjusted = synchronizer.gardner_timing_synchronization(filtered_signal)
 
-            header_preroll_symbols = min(int(guard_symbols), 2)
-
             fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
-
+            
             gold_index = gold_detector.detect(fine_freq_adjusted)
             ## Do the downsampling
 
@@ -208,10 +206,14 @@ def _tx_loop():
             if debug_mode:
                 logging.debug(f"TX loop got datagram from queue: {tx_datagram}")
 
+            # add guard symbols before and after the signal.
+            filtered_signal = np.concatenate([GUARD_SYMBOLS, filtered_signal, GUARD_SYMBOLS])
+
             sdr.send_signal(filtered_signal)
             if tx_datagram.get_msg_type == msgType.DATA:
-                _track_sent_data(tx_datagram)  # Track sent data for ACK handling
-        
+                with pending_lock:
+                    pending_ack.append(tx_datagram)
+            
             time.sleep(0.1)  # Sleep briefly to allow SDR to process transmission
 
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
@@ -532,10 +534,11 @@ if __name__ == "__main__":
     # ================== Message queues for inter-thread communication ==================
     tx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for outgoing messages to be transmitted by the TX thread
     rx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for incoming messages received by the RX thread to be processed by the TUI thread
-    pending_ack: Dict[int, Dict] = {}  # Dictionary to track pending ACKs with retry counts and datagram info
+    pending_ack: list = []  # List to track pending ACKs with retry counts and datagram info
     pending_lock = threading.Lock()  # Lock to synchronize access to pending_ack
-    MAX_RETRIES = int(config['coding']['max_retries'])  # Maximum number of retransmission attempts for unacknowledged messages
-    ACK_TIMEOUT_ms = float(config['radio']['ack_timeout_ms'])  # Timeout for waiting for ACKs (converted to milliseconds
+    MAX_RETRIES = int(config['datagram']['max_retries'])  # Maximum number of retransmission attempts for unacknowledged messages
+    ACK_TIMEOUT_ms = float(config['datagram']['ack_timeout_ms'])  # Timeout for waiting for ACKs (converted to milliseconds
+    GUARD_SYMBOLS = np.zeros(int(config['transmitter']['tx_guard_symbols']), dtype=np.complex64)  # Guard symbols to insert between packets
 
     # ================== Logging setup ==================
     log_dir = "log"

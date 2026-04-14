@@ -123,6 +123,14 @@ def get_gold_code_symbols(
             f"Unsupported Gold code configuration: modulation_type={modulation_type}, "
             f"code_length={code_length}"
         ) from exc
+    
+def calculate_preamble_sequenze(
+    modulation_type: str,
+    code_length: int,
+    code_index: int = 0,
+) -> np.ndarray:
+    """Calculate the preamble sequence for the given modulation type, code length, and code index."""
+    return 
 
 
 if __name__ == "__main__":

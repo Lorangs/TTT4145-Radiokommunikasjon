@@ -20,21 +20,33 @@ class GoldCodeDetector:
         gold_config = config["gold_sequence"]
         code_length = int(gold_config["code_length"])
         code_index = int(gold_config.get("code_index", 0))
-        header_repeat_count = int(gold_config.get("header_repeat_count", 1))
-        header_repeat_count = max(1, header_repeat_count)
 
-        self.base_gold_symbols = get_gold_code_symbols(
+        
+
+        gold_symbols = get_gold_code_symbols(
             modulation_type=modulation_type,
             code_length=code_length,
             code_index=code_index,
         ).astype(np.complex64, copy=False)
-        self.gold_symbols = np.tile(
-            self.base_gold_symbols,
-            header_repeat_count,
-        ).astype(np.complex64, copy=False)
+
+        rotations = modulation_rotations(modulation_type)
+        if modulation_type.upper() == "BPSK":
+            self.gold_symbols = {
+                0: gold_symbols * rotations[0], 
+                180: gold_symbols * rotations[1]
+            }
+        elif modulation_type.upper() == "QPSK":
+            self.gold_symbols = {
+                0: gold_symbols * rotations[0],
+                90: gold_symbols * rotations[1],
+                180: gold_symbols * rotations[2],
+                270: gold_symbols * rotations[3],
+            }
+        else:
+            raise ValueError(f"Unsupported modulation type for Gold code: {modulation_type}")
+
         self.code_length = code_length
         self.code_index = code_index
-        self.header_repeat_count = header_repeat_count
 
         threshold = gold_config.get(
             "correlation_scale_factor_threshold",
@@ -46,37 +58,42 @@ class GoldCodeDetector:
                 "'correlation_scale_factor_threshold' or 'correlation_threshold'."
             )
         self.correlation_scale_factor_threshold = float(threshold)
+        self.ref_energy = float(np.vdot(self.gold_symbols, self.gold_symbols).real)
 
     def add_gold_symbols(self, signal: np.ndarray) -> np.ndarray:
-        """Add the selected Gold code to the beginning of the symbol stream."""
-        return np.concatenate((self.gold_symbols, signal))
+        """Add the selected Gold code to the beginning and end of the symbol stream."""
+        return np.concatenate((self.gold_symbols, signal, self.gold_symbols))
 
     def remove_gold_symbols(self, signal: np.ndarray, start_index: int) -> np.ndarray:
-        """Remove the Gold code from the symbol stream starting at start_index."""
+        """Remove the Gold code from the symbol stream starting at start_index.
+            Removes only the leading Gold code, assuming the trailing one is after the payload. 
+            Caller should ensure start_index is valid and that the trailing Gold code is not needed before the returned payload.
+        """
         if start_index < 0 or start_index + len(self.gold_symbols) > len(signal):
             logging.warning("Invalid start index for removing Gold code.")
             return signal
         return signal[start_index + len(self.gold_symbols) :]
 
     def normalized_correlation(self, received_signal: np.ndarray) -> np.ndarray:
-        reference = self.gold_symbols.astype(np.complex64, copy=False)
+        """Compute the normalized correlation between the received signal and the Gold code."""
         received = np.asarray(received_signal).astype(np.complex64, copy=False)
 
-        if received.size < reference.size:
+        if received.size < self.gold_symbols.size:
             return np.array([], dtype=np.float32)
 
-        raw = np.correlate(received, reference, mode="valid")
-        ref_energy = float(np.vdot(reference, reference).real)
+        raw = np.correlate(received, self.gold_symbols, mode="valid")
+
         rx_power = np.abs(received) ** 2
         window_energy = np.convolve(
             rx_power,
-            np.ones(reference.size, dtype=np.float32),
+            np.ones(self.gold_symbols.size, dtype=np.float32),
             mode="valid",
         )
-        denom = np.sqrt(np.maximum(ref_energy * window_energy, 1e-12))
+        denom = np.sqrt(np.maximum(self.ref_energy * window_energy, 1e-12))
         return (np.abs(raw) / denom).astype(np.float32, copy=False)
 
     def detect(self, received_signal: np.ndarray) -> int | None:
+        """Detect the presence of the leading and trailing Gold code in the received signal and return the index of the first one, or None if no match exceeds the threshold."""
         scores = self.normalized_correlation(received_signal)
         if scores.size == 0:
             return None
