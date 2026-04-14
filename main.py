@@ -108,6 +108,7 @@ class SDRChatApp:
         self.tui_thread: threading.Thread = None
         self.tui_refresh_event: threading.Event = threading.Event()
         self.input_buffer: str = ""
+        self._input: str = ""  # Backward-compatible alias for partially typed console input.
 
         # ================== Message queues for inter-thread communication ==================
         self.tx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))
@@ -284,6 +285,7 @@ class SDRChatApp:
             if char in ("\r", "\n"):
                 completed = self.input_buffer
                 self.input_buffer = ""
+                self._input = ""
                 print()
                 return completed.strip()
 
@@ -293,6 +295,7 @@ class SDRChatApp:
             if char == "\b":
                 if self.input_buffer:
                     self.input_buffer = self.input_buffer[:-1]
+                    self._input = self.input_buffer
                     print("\b \b", end="", flush=True)
                 continue
 
@@ -302,6 +305,7 @@ class SDRChatApp:
                 continue
 
             self.input_buffer += char
+            self._input = self.input_buffer
             print(char, end="", flush=True)
 
         return None

@@ -1,3 +1,8 @@
+"""
+./.venv/bin/pytest -q tests/test_frame_layout.py
+"""
+
+
 from __future__ import annotations
 
 import argparse
@@ -19,7 +24,7 @@ from TX_pipeline import (
 from forward_error_correction import FCCodec
 from gold_detection import GoldCodeDetector, detect_gold_with_rotation
 from interleaver import Interleaver
-from modulation import normalize_config_modulation_name
+from modulation import bits_per_symbol, normalize_config_modulation_name
 
 
 @dataclass
@@ -170,6 +175,8 @@ def validate_layout(
     report: FrameLayoutReport,
 ) -> list[str]:
     failures: list[str] = []
+    modulation_name = normalize_config_modulation_name(config)
+    modulation_bits_per_symbol = bits_per_symbol(modulation_name)
     encoded_message = message.encode("utf-8")
     datagram = Datagram.as_string(message, msg_id=np.uint8(7), msg_type=msgType.DATA)
     packed = np.frombuffer(datagram.pack(), dtype=np.uint8)
@@ -193,9 +200,14 @@ def validate_layout(
     if not np.all(packed[payload_end:] == Datagram.PAD_BYTE):
         failures.append("Payload padding is not zero-filled after the message bytes.")
 
-    if report.payload_symbols != report.conv_output_bits:
+    expected_payload_symbols = int(
+        math.ceil(report.conv_output_bits / modulation_bits_per_symbol)
+    )
+    if report.payload_symbols != expected_payload_symbols:
         failures.append(
-            f"Payload symbol count mismatch: expected {report.conv_output_bits}, got {report.payload_symbols}"
+            "Payload symbol count mismatch: "
+            f"expected {expected_payload_symbols} for {report.conv_output_bits} coded bits "
+            f"at {modulation_bits_per_symbol} bit(s)/symbol, got {report.payload_symbols}"
         )
 
     if report.channel_payload_symbols != report.payload_symbols:
