@@ -22,6 +22,7 @@ import atexit
 # import third party moduels
 import numpy as np
 from yaml import safe_load
+from numba import njit
 
 # import modules
 from chat_tui import ChatTUI
@@ -265,12 +266,13 @@ def _tx_loop():
             sdr.send_signal(filtered_signal)
             if tx_datagram.get_msg_type == msgType.DATA:
                 with pending_lock:
-                    pending_ack.append((
-                        int(tx_datagram.get_msg_id),
-                        0,  # retries
-                        tx_datagram,
-                        time.time() * 1000.0
-                    ))
+                    if _find_pending_index(int(tx_datagram.get_msg_id)) is None:
+                        pending_ack.append((
+                            int(tx_datagram.get_msg_id),
+                            0,  # retries
+                            tx_datagram,
+                            time.time() * 1000.0
+                        ))
             
             time.sleep(0.1)  # Sleep briefly to allow SDR to process transmission
 
@@ -343,7 +345,6 @@ def _tui_loop():
         time.sleep(0.1)  # Sleep briefly to avoid tight error loop
     logging.info("TUI loop stopped.")
         
-
 def _ack_timeout_loop():
     logging.info("ACK timeout loop started.")
 
