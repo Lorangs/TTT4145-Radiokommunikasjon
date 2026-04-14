@@ -34,7 +34,6 @@ from gold_detection import GoldCodeDetector
 from synchronize import Synchronizer
 from forward_error_correction import FCCodec
 from convolutional_coder import ConvolutionalCoder
-from interleaver import Interleaver
 from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
@@ -176,8 +175,7 @@ def _rx_loop():
             
             received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
             conv_decoded_bits = conv_coder.decode(received_bits)
-            deinterleaved_bits = interleaver.deinterleave(conv_decoded_bits)
-            descrambled_bits = scrambler.apply(deinterleaved_bits)
+            descrambled_bits = scrambler.apply(conv_decoded_bits)
             fec_decoded_bits = fec_codec.rs_decode(descrambled_bits)
             received_datagram = Datagram.unpack(fec_decoded_bits)
 
@@ -236,9 +234,7 @@ def _tx_loop():
 
             fec_coded_data = fec_codec.encode(tx_datagram.pack())
             scrambled_data = scrambler.apply(fec_coded_data)
-            bit_stream = np.unpackbits(scrambled_data)
-            interleaved_data = interleaver.interleave(bit_stream)
-            conv_coded_data = conv_coder.encode(interleaved_data)
+            conv_coded_data = conv_coder.encode(scrambled_data)
             modulated_signal = modulation_protocol.modulate_message(conv_coded_data)
             signal_with_gold = gold_detector.add_gold_symbols(modulated_signal)
             upsampled_signal = modulation_protocol.upsample_symbols(signal_with_gold)
@@ -271,19 +267,19 @@ def _tx_loop():
                 logging.debug(f"TX loop got datagram from queue: {tx_datagram}")
 
             # add guard symbols before and after the signal.
-            filtered_signal = np.concatenate([GUARD_SYMBOLS, filtered_signal, GUARD_SYMBOLS])
+            signal_for_transmission = np.concatenate([GUARD_SYMBOLS, filtered_signal, GUARD_SYMBOLS])
 
-            sdr.send_signal(filtered_signal)
+            sdr.send_signal(signal_for_transmission)
             logging.debug("Datagram length:\t %d bytes.", len(tx_datagram.pack()))
             logging.debug("FEC coded data length:\t %d bytes.", len(fec_coded_data))
             logging.debug("Scrambled data length:\t %d bytes.", len(scrambled_data))
             logging.debug("Scrambled data (first 64 bytes):\t %s", scrambled_data[:64])  # Print first 64 bytes of scrambled data for debugging
-            logging.debug("Interleaved data length:\t %d bits.", len(interleaved_data))
-            logging.debug("Interleaved data:\t %s", interleaved_data[:64])  # Print first 64 bits of interleaved data for debugging
             logging.debug("Conv coded data length:\t %d bits.", len(conv_coded_data))
             logging.debug("Modulated signal length:\t %d samples.", len(modulated_signal))
             logging.debug("Signal with Gold length:\t %d samples.", len(signal_with_gold))
+            logging.debug("Upsampled signal length:\t %d samples.", len(upsampled_signal))
             logging.debug("Filtered signal length:\t %d samples.", len(filtered_signal))
+            logging.debug("Signal for transmission length:\t %d samples.", len(signal_for_transmission))
 
             if tx_datagram.get_msg_type == msgType.DATA:
                 _track_sent_data(tx_datagram) 
@@ -655,7 +651,6 @@ if __name__ == "__main__":
 
     # ================= Initialize Modules with configuration =================
     modulation_protocol = ModulationProtocol(config)
-    interleaver = Interleaver(config)
     scrambler = LFSRScrambler(config)
     fec_codec = FCCodec(config)
     conv_coder = ConvolutionalCoder(config)
