@@ -1,4 +1,6 @@
 import numpy as np
+from project_logger import get_logger
+logger = get_logger(__name__)
 
 
 class LFSRScrambler:
@@ -16,7 +18,10 @@ class LFSRScrambler:
         - the all-zero state is forbidden because it would produce only zeros
     """
     
-    def __init__(self, seed: int = 0x5D, register_length: int = 7):
+    def __init__(self, config: dict):
+        seed = int(config["coding"]["scrambler_seed"])
+        register_length = int(config["coding"]["scrambler_register_length"])
+
         if seed == 0:
             raise ValueError("Scrambler seed must be non-zero.")
         self.seed = seed

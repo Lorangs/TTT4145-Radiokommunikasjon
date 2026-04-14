@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import numpy as np
 from commpy import modulation as commpy_modulation
+from project_logger import get_logger
+logger = get_logger(__name__)
 
 
 def normalize_modulation_name(modulation_type: str, modulation_order: int) -> str:
@@ -94,21 +96,15 @@ def modulation_rotations(modulation_name: str) -> tuple[complex, ...]:
         raise ValueError(f"Unsupported modulation type: {modulation_name}")
 
 
-def upsample_symbols(symbols: np.ndarray, samples_per_symbol: int) -> np.ndarray:
-    upsampled = np.zeros(symbols.size * samples_per_symbol, dtype=np.complex64)
-    upsampled[::samples_per_symbol] = symbols.astype(np.complex64, copy=False)
-    return upsampled
-
-def downsample_signal(signal: np.ndarray, samples_per_symbol: int) -> np.ndarray:
-    return signal[::samples_per_symbol]
-
 class ModulationProtocol:
     def __init__(self, config: dict):
         modulation_config = config["modulation"]
+        
         raw_type = str(modulation_config["type"]).upper().strip()
         self.modulation_order = int(modulation_config["order"])
         self.modulation_type = normalize_modulation_name(raw_type, self.modulation_order)
-
+        self.samples_per_symbol = int(config["modulation"]["samples_per_symbol"])
+        
         if raw_type == "PSK":
             self.modulator = commpy_modulation.PSKModem(self.modulation_order)
         elif raw_type == "QAM":
@@ -123,6 +119,15 @@ class ModulationProtocol:
     def demodulate_signal(self, signal: np.ndarray) -> np.ndarray:
         """Demodulate a complex baseband signal back into a bit stream."""
         return self.modulator.demodulate(signal, demod_type="hard")
+
+
+    def upsample_symbols(self, symbols: np.ndarray) -> np.ndarray:
+        upsampled = np.zeros(symbols.size * self.samples_per_symbol, dtype=np.complex64)
+        upsampled[::self.samples_per_symbol] = symbols.astype(np.complex64, copy=False)
+        return upsampled
+
+    def downsample_signal(self, signal: np.ndarray) -> np.ndarray:
+        return signal[::self.samples_per_symbol]
 
 
 if __name__ == "__main__":

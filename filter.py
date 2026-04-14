@@ -8,9 +8,11 @@ write the filter coefficients to a file for hardware implementation on an SDR.
 The BWLPFilter class implements an optional Butterworth low-pass filter that can be applied to the received signal after coarse frequency correction.
 """
 
-import logging 
 import numpy as np
 from scipy import signal
+
+from project_logger import get_logger
+logger = get_logger(__name__)
 
 class RRCFilter:
     """Class to generate and manage Root Raised Cosine (RRC) filters."""
@@ -118,10 +120,10 @@ class RRCFilter:
                     t = int(round(tap))
                     f.write(f"{t},{t}\n") 
         
-            logging.info(f"Filter coefficients successfully written to: {filename}.")
+            logger.info(f"Filter coefficients successfully written to: {filename}.")
 
         except Exception as e:
-            logging.error(f"Error writing filter coefficients to file: {e}")
+            logger.error(f"Error writing filter coefficients to file: {e}")
             raise e
         
     

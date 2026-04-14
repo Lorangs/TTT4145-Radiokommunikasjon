@@ -7,9 +7,10 @@ import sys
 import threading
 from datetime import datetime
 from collections import deque
-import logging
+from project_logger import get_logger
 from datagram import Datagram, msgType
 
+logger = get_logger(__name__)
 
 class ChatTUI:
     """Simple terminal-based chat UI"""
@@ -21,14 +22,14 @@ class ChatTUI:
             max_display_messages: Maximum messages to display on screen
         """
         self.messages: deque[str] = deque(maxlen=int(config['radio']['queue_size']) ) # Store recent messages for display
-        logging.info("Chat TUI initialized.")
+        logger.info("Chat TUI initialized.")
 
     def __del__(self):
         """Cleanup resources if needed"""
         for msg in self.messages:
             del msg  # Explicitly delete messages if needed (not usually necessary in Python)
         del self.messages
-        logging.info("Chat TUI destroyed.")
+        logger.info("Chat TUI destroyed.")
 
     def _clear_screen(self):
         """Clear terminal screen"""

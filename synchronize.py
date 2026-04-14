@@ -5,6 +5,8 @@ from numba import njit
 from filter import RRCFilter
 from modulation import normalize_config_modulation_name
 
+from project_logger import get_logger
+logger = get_logger(__name__)
 
 def _interp_cubic_py(x, i) -> np.complex64:
     i1 = int(np.floor(i))
@@ -355,9 +357,6 @@ class Synchronizer:
         print(f"Costas loop parameters: Kp={self.costas_Kp:.6f}, Ki={self.costas_Ki:.6f}")
         print(f"Gardner loop parameters: Kp={self.gardner_Kp:.6f}, Ki={self.gardner_Ki:.6f}")
         
-        filter = RRCFilter(config)
-        rc_filter = filter.rc_coefficients
-
         if self.modulation_scheme == 'BPSK':
             self.modulation_order = 2.0    
         elif self.modulation_scheme == 'QPSK':

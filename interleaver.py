@@ -10,6 +10,8 @@ without relying on a single global interleaver length.
 """
 
 import numpy as np
+from project_logger import get_logger
+logger = get_logger(__name__)
 
 
 class Interleaver:
@@ -35,11 +37,17 @@ class Interleaver:
 
     def interleave(self, encoded_bits: np.ndarray) -> np.ndarray:
         """Interleave bits using a permutation derived from the input length."""
+        bits = np.asarray(encoded_bits, dtype=np.uint8)
+        if bits.ndim != 1:
+            raise ValueError("Input bits must be a 1D array.")
         permutation, _ = self._permutations(int(encoded_bits.size))
         return encoded_bits[permutation]
 
     def deinterleave(self, interleaved_bits: np.ndarray) -> np.ndarray:
         """Restore original bit order using the inverse permutation for this length."""
+        bits = np.asarray(interleaved_bits, dtype=np.uint8)
+        if bits.ndim != 1:
+            raise ValueError("Input bits must be a 1D array.")
         _, inverse = self._permutations(int(interleaved_bits.size))
         return interleaved_bits[inverse]
 

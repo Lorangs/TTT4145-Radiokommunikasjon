@@ -5,7 +5,8 @@ Gold-code detector and framing helper.
 
 from __future__ import annotations
 
-import logging
+from project_logger import get_logger
+logger = get_logger(__name__)
 
 import numpy as np
 
@@ -16,24 +17,24 @@ from modulation import normalize_config_modulation_name
 
 class GoldCodeDetector:
     def __init__(self, config: dict):
-        modulation_type = normalize_config_modulation_name(config)
+        self.modulation_type = normalize_config_modulation_name(config)
         gold_config = config["gold_sequence"]
         code_length = int(gold_config["code_length"])
         code_index = int(gold_config.get("code_index", 0))
 
         gold_symbols = get_gold_code_symbols(
-            modulation_type=modulation_type,
+            modulation_type=self.modulation_type,
             code_length=code_length,
             code_index=code_index,
         ).astype(np.complex64, copy=False)
 
-        self.rotation_matrix = modulation_rotations(modulation_type) / np.sqrt(2)  # Normalize rotation matrix to keep symbol energy consistent
-        if modulation_type.upper() == "BPSK":
+        self.rotation_matrix = modulation_rotations(self.modulation_type) / np.sqrt(2)  # Normalize rotation matrix to keep symbol energy consistent
+        if self.modulation_type.upper() == "BPSK":
             self.gold_symbols = {
                 0: gold_symbols * self.rotation_matrix[0], 
                 180: gold_symbols * self.rotation_matrix[1]
             }
-        elif modulation_type.upper() == "QPSK":
+        elif self.modulation_type.upper() == "QPSK":
             self.gold_symbols = {
                 0: gold_symbols * self.rotation_matrix[0],
                 90: gold_symbols * self.rotation_matrix[1],
@@ -41,7 +42,7 @@ class GoldCodeDetector:
                 270: gold_symbols * self.rotation_matrix[3],
             }
         else:
-            raise ValueError(f"Unsupported modulation type for Gold code: {modulation_type}")
+            raise ValueError(f"Unsupported modulation type for Gold code: {self.modulation_type}")
 
         self.code_length = code_length
         self.code_index = code_index
@@ -56,21 +57,22 @@ class GoldCodeDetector:
                 "'correlation_scale_factor_threshold' or 'correlation_threshold'."
             )
         self.correlation_scale_factor_threshold = float(threshold)
-        self.ref_energy = float(np.vdot(self.gold_symbols, self.gold_symbols).real)
+        self.ref_energy = float(np.vdot(self.gold_symbols.get(0), self.gold_symbols.get(0)).real)
+
 
     def add_gold_symbols(self, signal: np.ndarray) -> np.ndarray:
         """Add the selected Gold code to the beginning and end of the symbol stream."""
-        return np.concatenate((self.gold_symbols, signal, self.gold_symbols))
+        return np.concatenate((self.gold_symbols.get(0), signal, self.gold_symbols.get(0)))
 
     def remove_gold_symbols(self, signal: np.ndarray, start_index: int) -> np.ndarray:
         """Remove the Gold code from the symbol stream starting at start_index.
             Removes only the leading Gold code, assuming the trailing one is after the payload. 
             Caller should ensure start_index is valid and that the trailing Gold code is not needed before the returned payload.
         """
-        if start_index < 0 or start_index + len(self.gold_symbols) > len(signal):
-            logging.warning("Invalid start index for removing Gold code.")
+        if start_index < 0 or (start_index + self.code_length) > len(signal):
+            logger.warning("Invalid start index for removing Gold code.")
             return signal
-        return signal[start_index + len(self.gold_symbols) :]
+        return signal[start_index + self.code_length :]
 
     def normalized_correlation(self, received_signal: np.ndarray) -> np.ndarray:
         """Compute the normalized correlation between the received signal and the Gold code."""
@@ -89,6 +91,29 @@ class GoldCodeDetector:
         )
         denom = np.sqrt(np.maximum(self.ref_energy * window_energy, 1e-12))
         return (np.abs(raw) / denom).astype(np.float32, copy=False)
+    
+    def _normalized_correlation_with_template(
+        self,
+        received_signal: np.ndarray,
+        template: np.ndarray,
+    ) -> np.ndarray:
+        received = np.asarray(received_signal).astype(np.complex64, copy=False)
+        template = np.asarray(template).astype(np.complex64, copy=False)
+
+        if received.size < template.size:
+            return np.array([], dtype=np.float32)
+
+        raw = np.correlate(received, template, mode="valid")
+        rx_power = np.abs(received) ** 2
+        window_energy = np.convolve(
+            rx_power,
+            np.ones(template.size, dtype=np.float32),
+            mode="valid",
+        )
+        ref_energy = float(np.vdot(template, template).real)
+        denom = np.sqrt(np.maximum(ref_energy * window_energy, 1e-12))
+        return (np.abs(raw) / denom).astype(np.float32, copy=False)
+
 
     def detect(self, received_signal: np.ndarray) -> int | None:
         """Detect the presence of the leading and trailing Gold code in the received signal and return the index of the first one, or None if no match exceeds the threshold."""
@@ -106,35 +131,27 @@ class GoldCodeDetector:
         """Rotate the signal by the specified angle (in degrees) if it's a known rotation for the modulation type."""
         return signal * self.rotation_matrix[rotation]
 
-    def detect_with_score(self, received_signal: np.ndarray) -> tuple[int, float] | tuple[None, float]:
-        """Detect the presence of the leading and trailing Gold code in the received signal and return the index of the first one and the corresponding correlation score, or (None, 0) if no match exceeds the threshold."""
+    def detect_with_score(
+        self, 
+        received_signal: np.ndarray
+    ) -> tuple[tuple[int, float] | None, tuple[int, float] | None]:
+        """
+        Return two strongest peaks (leading, trailing), or (None, None).
+        Each peak is (index, score).
+        """
         scores = self.normalized_correlation(received_signal)
-        if scores.size == 0:
-            return None, 0
-        
-        leading_idx = 0
-        leading_value = 0.0
-        trailing_idx = -1
-        trailing_value = 0.0
-
-        peaks_idx = np.argsort(scores)[-100:][::-1]  # Get indices of the 10 highest peaks
-        peak_values = scores[peaks_idx]
-
         p1, p2 = self._top_two_peaks_min_separation(
-            scores= scores,
-            min_separation= self.code_length,  # Require peaks
-            threshold= self.correlation_scale_factor_threshold
-        )  
-
+            scores=scores,
+            min_separation=self.code_length,
+            threshold=self.correlation_scale_factor_threshold,
+        )
         if p1 is None or p2 is None:
-            return None, 0.0, None, 0.0
+            return None, None
 
-        # return in time order: leading, trailing
-        (i1, v1), (i2, v2) = p1, p2
-        if i1 <= i2:
+        # time order
+        if p1[0] <= p2[0]:
             return p1, p2
-        else:
-            return p2, p1
+        return p2, p1
 
     @staticmethod
     def _top_two_peaks_min_separation(
@@ -173,21 +190,27 @@ class GoldCodeDetector:
         expected_index: int | None = None,
         search_radius: int | None = None,
     ) -> tuple[int | None, float, complex, np.ndarray]:
-        best_index = None
+        best_index: int | None = None
         best_peak = -1.0
         best_rotation = 0
 
-        for rotation, sequence in self.gold_symbols.items():
-            decisions = nearest_constellation_symbols(sequence, self.modulation_type)
-            first, second = self.detect_with_score(decisions)
-            if first and second:
-                index, peak = first
-                if peak > best_peak:
-                    best_peak = peak
-                    best_index = index
-                    best_rotation = rotation
+        for rotation, template in self.gold_symbols.items():
+            scores = self._normalized_correlation_with_template(received_symbols, template)
+            p1, p2 = self._top_two_peaks_min_separation(
+                scores=scores,
+                min_separation=self.code_length,
+                threshold=self.correlation_scale_factor_threshold,
+            )
+            if p1 is None or p2 is None:
+                continue
 
-        return best_index, best_rotation 
+            index, peak = p1
+            if peak > best_peak:
+                best_peak = peak
+                best_index = index
+                best_rotation = rotation
+
+        return best_index, best_rotation
 
     def rank_gold_candidates(
         self,
