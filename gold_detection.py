@@ -205,7 +205,8 @@ class GoldCodeDetector:
         received_symbols: np.ndarray,
         expected_index: int | None = None,
         search_radius: int | None = None,
-    ) -> tuple[int | None, float, complex, np.ndarray]:
+    ) -> tuple[int | None, int]:
+        """Detect the Gold code in the received symbols, accounting for possible rotations. Returns (index, rotation)."""
         best_index: int | None = None
         best_peak = -1.0
         best_rotation = 0

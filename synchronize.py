@@ -297,7 +297,6 @@ class Synchronizer:
         self.sample_rate = self.sps * self.symbol_rate
         self.nfft = int(config['synchronization']['nfft'])
         self.use_numba = bool(use_numba)
-
         self.signal_power_threshold_dB = float(config['synchronization']['signal_power_threshold_dB'])
         self.noise_floor_dB = 0.0 # linear scale, to be set after SDR connection
         
@@ -328,31 +327,33 @@ class Synchronizer:
         self.gardner_tracking_payload_symbols = int(
             sync_cfg.get("gardner_tracking_payload_symbols", 256)
         )
-        self.short_equalizer_enable = bool(
-            sync_cfg.get("short_equalizer_enable", True)
-        )
-        self.short_equalizer_tap_count = int(
-            sync_cfg.get("short_equalizer_tap_count", 5)
-        )
-        if self.short_equalizer_tap_count < 1:
-            self.short_equalizer_tap_count = 1
-        if self.short_equalizer_tap_count % 2 == 0:
-            self.short_equalizer_tap_count += 1
-        self.short_equalizer_regularization = float(
-            sync_cfg.get("short_equalizer_regularization", 1.0e-3)
-        )
-        self.short_equalizer_apply_if_improved = bool(
-            sync_cfg.get("short_equalizer_apply_if_improved", True)
-        )
-        self.short_equalizer_train_on_preamble = bool(
-            sync_cfg.get("short_equalizer_train_on_preamble", True)
-        )
-        self.short_equalizer_train_on_header = bool(
-            sync_cfg.get("short_equalizer_train_on_header", True)
-        )
-        self.short_equalizer_min_training_symbols = int(
-            sync_cfg.get("short_equalizer_min_training_symbols", 32)
-        )
+
+        # Equalizer parameters (currently not used)
+        #self.short_equalizer_enable = bool(
+        #    sync_cfg.get("short_equalizer_enable", True)
+        #)
+        #self.short_equalizer_tap_count = int(
+        #    sync_cfg.get("short_equalizer_tap_count", 5)
+        #)
+        #if self.short_equalizer_tap_count < 1:
+        #    self.short_equalizer_tap_count = 1
+        #if self.short_equalizer_tap_count % 2 == 0:
+        #    self.short_equalizer_tap_count += 1
+        #self.short_equalizer_regularization = float(
+        #    sync_cfg.get("short_equalizer_regularization", 1.0e-3)
+        #)
+        #self.short_equalizer_apply_if_improved = bool(
+        #    sync_cfg.get("short_equalizer_apply_if_improved", True)
+        #)
+        #self.short_equalizer_train_on_preamble = bool(
+        #    sync_cfg.get("short_equalizer_train_on_preamble", True)
+        #)
+        #self.short_equalizer_train_on_header = bool(
+        #    sync_cfg.get("short_equalizer_train_on_header", True)
+        #)
+        #self.short_equalizer_min_training_symbols = int(
+        #    sync_cfg.get("short_equalizer_min_training_symbols", 32)
+        #)
 
         print(f"Costas loop parameters: Kp={self.costas_Kp:.6f}, Ki={self.costas_Ki:.6f}")
         print(f"Gardner loop parameters: Kp={self.gardner_Kp:.6f}, Ki={self.gardner_Ki:.6f}")
@@ -383,7 +384,7 @@ class Synchronizer:
 
     def set_noise_floor(self, level_dB: float):
         """Set the noise floor in dB for adaptive thresholding."""
-        print(f"Setting noise floor to {level_dB:.2f} dB")
+        logger.info(f"Setting noise floor to {level_dB:.2f} dB")
         self.noise_floor_dB = level_dB
 
     def coarse_frequenzy_synchronization(self, received_signal: np.ndarray) -> np.ndarray:
@@ -399,7 +400,7 @@ class Synchronizer:
         estimated_frequenzy_offset = freqs[np.argmax(magnitude)] / self.modulation_order # Divide by modulation order to get the actual frequency offset
         
         signal_power_dB = 10 * np.log10(np.max(magnitude)**2)
-        if signal_power_dB < self.noise_floor_dB + self.signal_power_threshold_dB:
+        if signal_power_dB < (self.noise_floor_dB + self.signal_power_threshold_dB):
             return None
 
         time_vector = np.arange(len(received_signal)) / self.sample_rate
