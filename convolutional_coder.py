@@ -7,36 +7,9 @@ ensure only one bit transition per symbol change
 
 import numpy as np
 import numpy.typing as npt
-import numba 
+from numba import njit
 from project_logger import get_logger
 logger = get_logger(__name__)
-
-class ConvolutionalCoder:
-    def __init__(self, config: dict, warmup: bool = True, use_numba: bool = True):
-        self.K = int(config['coding']['convolutional_K'])
-        self.DATARATE = config['coding']['convolutional_datarate']
-        self.GENERATOR = get_generator_matrix(self.K, self.DATARATE)
-        self.n = self.GENERATOR.shape[0]  # number of output bits per input bit
-        self.use_numba = bool(use_numba)
-        self.expected_byte_length = (
-            int(config["coding"].get("rs_added_bytes", 16)) +
-            int(config["datagram"]["total_size"]) 
-        )
-        if warmup:
-            # Run encode and decode once to trigger numba compilation before first real use.
-            dummy_input = np.array([0, 1, 0], dtype=np.uint8)
-            self.encode(dummy_input)
-            self.decode(self.encode(dummy_input))
-        
-    def encode(self, input_bits: np.ndarray) -> np.ndarray:
-        """Encode input bits using a convolutional code with datarate 1/4."""
-        return _encode_bytes(input_bits, self.GENERATOR, self.K, self.n)
-    
-    def decode(self, received_bits: np.ndarray) -> np.ndarray:
-        """Decode received bits using the Viterbi algorithm with hard decision."""
-        return _viterbi_decode_hard(received_bits, self.GENERATOR, self.K, self.n, self.expected_byte_length * 8)
-    
-
 
 # Known good generator polynomials (octal)
 GENERATOR_TABLE = {
@@ -56,6 +29,32 @@ GENERATOR_TABLE = {
         "1/4": [0o171, 0o133, 0o165, 0o117],
     }
 }
+
+class ConvolutionalCoder:
+    def __init__(self, config: dict, warmup: bool = True, use_numba: bool = True):
+        self.K = int(config['coding']['convolutional_K'])
+        self.DATARATE = config['coding']['convolutional_datarate']
+        self.GENERATOR = get_generator_matrix(self.K, self.DATARATE)
+        self.n = self.GENERATOR.shape[0]  # number of output bits per input bit
+        self.use_numba = bool(use_numba)
+        self.expected_bit_length = (
+            int(config["coding"].get("rs_added_bytes", 16)) +
+            int(config["datagram"]["total_size"]) 
+        ) * 8
+        if warmup:
+            # Run encode and decode once to trigger numba compilation before first real use.
+            dummy_input = np.zeros((self.expected_bit_length + self.K - 1) // 8, dtype=np.uint8) 
+            encoded_dummy = self.encode(dummy_input)
+            self.decode(encoded_dummy)
+        
+    def encode(self, input_bits: np.ndarray) -> np.ndarray:
+        """Encode input bits using a convolutional code with datarate 1/4."""
+        return _encode_bytes(input_bits, self.GENERATOR, self.K, self.n)
+    
+    def decode(self, received_bits: np.ndarray) -> np.ndarray:
+        """Decode received bits using the Viterbi algorithm with hard decision."""
+        return _viterbi_decode_hard(received_bits, self.GENERATOR, self.K, self.n, self.expected_bit_length)
+
 def octal_to_binary_array(octal_val, K):
     """Convert octal polynomial to binary tap vector"""
     binary_str = bin(octal_val)[2:]  # remove '0b'
@@ -78,6 +77,7 @@ def get_generator_matrix(K, rate="1/2") -> np.ndarray:
         dtype=np.uint8
     )
 
+@njit(cache=True, fastmath=True)
 def _encode_bytes(
     input_bytes: npt.NDArray[np.uint8], 
     G: np.ndarray, 
@@ -87,7 +87,7 @@ def _encode_bytes(
     assert n <= 8, "This byte-oriented encoding function only supports up to 8 output bits per input bit (datarate >= 1/8)."
     
     data = np.asarray(input_bytes, dtype=np.uint8).reshape(-1)  # Ensure 1D array
-    in_bits = np.unpackbits(data, bitorder='little')  # Unpack to bits, LSB first
+    in_bits = _unpackbits_little(data)  # Unpack to bits, LSB first
 
     n_input = in_bits.size
     n_steps = n_input + (k-1)  # Total steps including tail bits for ramp down
@@ -111,10 +111,10 @@ def _encode_bytes(
         for j in range(n):
             out_bits[base + j] = np.uint8(np.sum(shift_register * G[j, :]) & 0x1)
 
-    return np.packbits(out_bits, bitorder='little')  # Pack back to bytes, LSB first
+    return _packbits_little(out_bits)  # Pack back to bytes, LSB first
 
 
-#@numba.njit(fastmath=True, cache=True)
+@njit(fastmath=True, cache=True)
 def _viterbi_decode_hard(
         received_bytes: np.ndarray,
         G: np.ndarray,
@@ -129,7 +129,7 @@ def _viterbi_decode_hard(
     """
 
     data = np.asarray(received_bytes, dtype=np.uint8).reshape(-1)  # Ensure 1D array
-    received_bits = np.unpackbits(data, bitorder='little')  # Unpack to bits, LSB first
+    received_bits = _unpackbits_little(data)  # Unpack to bits, LSB first
     expected_coded_bits = (expected_bit_length + (k-1)) * n  # Total bits including tail bits
     
     if received_bits.size < expected_coded_bits:
@@ -193,8 +193,35 @@ def _viterbi_decode_hard(
     else:        
         trimmed_output = decoded_bits
 
-    return np.packbits(trimmed_output, bitorder='little')  # Pack back to bytes, LSB first
+    return _packbits_little(trimmed_output)  # Pack back to bytes, LSB first
   
+
+@njit(cache=True)
+def _unpackbits_little(data: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
+    """
+    Helper function to unpack bytes into bits with little-endian bit order (LSB first).
+    Can be swapped for np.unpackbits(data, bitorder='little') if not using numba.
+    """
+    out = np.zeros(data.size * 8, dtype=np.uint8)
+    for i in range(data.size):
+        v = int(data[i])
+        base = i * 8
+        for b in range(8):
+            out[base + b] = np.uint8((v >> b) & 0x1)
+    return out
+
+@njit(cache=True)
+def _packbits_little(bits: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
+    """
+    Helper function to pack bits into bytes with little-endian bit order (LSB first).
+    Can be swapped for np.packbits(bits, bitorder='little') if not using numba.
+    """
+    n_bytes = (bits.size + 7) // 8
+    out = np.zeros(n_bytes, dtype=np.uint8)
+    for i in range(bits.size):
+        if bits[i] & 0x1:
+            out[i // 8] = np.uint8(out[i // 8] | np.uint8(1 << (i % 8)))
+    return out
 
 
 if __name__ == "__main__":
@@ -218,7 +245,7 @@ if __name__ == "__main__":
                 'total_size': 1
             }
         },
-        warmup=False,
+        warmup=True,
         use_numba=True
     )
     test_string = "H"
@@ -242,6 +269,13 @@ if __name__ == "__main__":
     print("Encoded bits:")
     print(encoded_bytes)
     print()
+
+    # add some noise/errors for testing
+    noisy_bytes = np.copy(encoded_bytes)
+    noisy_bytes[0] ^= 0xFF  # Flip bits in the first byte
+    # add byte in middle
+    noisy_bytes = np.insert(noisy_bytes, len(noisy_bytes) // 2, 0xFF)  # Insert a byte of all 1s in the middle
+    # add byte at end    noisy_bytes[-1] 
 
     decoded_bytes = coder.decode(encoded_bytes)
     print("Decoded bytes:")
