@@ -6,6 +6,7 @@ ensure only one bit transition per symbol change
 """
 
 import numpy as np
+import numpy.typing as npt
 import numba 
 from project_logger import get_logger
 logger = get_logger(__name__)
@@ -25,13 +26,13 @@ class ConvolutionalCoder:
             self.encode(dummy_input)
             self.decode(self.encode(dummy_input))
         
-    def encode(self, input_bits: np.ndarray, ramp_down: bool = True) -> np.ndarray:
+    def encode(self, input_bits: npt.NDArray[np.uint8], ramp_down: bool = True) -> npt.NDArray[np.uint8]:
         """Encode input bits using a convolutional code with datarate 1/4."""
         #if not self.use_numba:
         #    return _encode.py_func(input_bits, self.GENERATOR, self.K, self.n, ramp_down)
         return _encode(input_bits, self.GENERATOR, self.K, self.n, ramp_down)
     
-    def decode(self, received_bits: np.ndarray, ramp_down: bool = True) -> np.ndarray:
+    def decode(self, received_bits: npt.NDArray[np.uint8], ramp_down: bool = True) -> npt.NDArray[np.uint8]:
         """Decode received bits using the Viterbi algorithm with hard decision."""
         #if not self.use_numba:
         #    return _viterbi_decode_hard_py_func(received_bits, self.GENERATOR, self.K, self.n, ramp_down)
@@ -81,11 +82,11 @@ def get_generator_matrix(K, rate="1/2") -> np.ndarray:
 
 @numba.njit(fastmath=True, cache=True)
 def _encode(
-    input_bits: np.ndarray, 
-    G: np.ndarray, 
+    input_bits: npt.NDArray[np.uint8], 
+    G: npt.NDArray[np.uint8], 
     k: int, 
     n: int, 
-    ramp_down: bool = True) -> np.ndarray:
+    ramp_down: bool = True) -> npt.NDArray[np.uint8]:
     """Encode input bits using a convolutional code with datarate 1/4."""
 
     if ramp_down:
@@ -113,11 +114,11 @@ def _encode(
 
 @numba.njit(fastmath=True, cache=True)
 def _viterbi_decode_hard(
-        received_bits: np.ndarray,
-        G: np.ndarray,
+        received_bits: npt.NDArray[np.uint8],
+        G: npt.NDArray[np.uint8],
         k: int,
         n: int,
-        ramp_down: bool = True) -> np.ndarray:
+        ramp_down: bool = True) -> npt.NDArray[np.uint8]:
     """Decode received bits using the Viterbi algorithm with hard decision.
     Args:
         received_bits: 1D array of received bits (length must be multiple of n)
