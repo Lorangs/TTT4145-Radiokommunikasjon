@@ -1,7 +1,5 @@
 """
-Convolutional Channel encoder with datarate 1/4
-
-ensure only one bit transition per symbol change
+Convolutional Channel encoder with datarate 1/2, 1/3 or 1/4 and constraint length K=3,5 or 7.
 
 """
 
@@ -32,8 +30,8 @@ GENERATOR_TABLE = {
 
 class ConvolutionalCoder:
     def __init__(self, config: dict, warmup: bool = True, use_numba: bool = True):
-        self.K = int(config['coding']['convolutional_K'])
-        self.DATARATE = config['coding']['convolutional_datarate']
+        self.K = int(config['coding']['conv_K'])
+        self.DATARATE = config['coding']['conv_datarate']
         self.GENERATOR = get_generator_matrix(self.K, self.DATARATE)
         self.n = self.GENERATOR.shape[0]  # number of output bits per input bit
         self.use_numba = bool(use_numba)

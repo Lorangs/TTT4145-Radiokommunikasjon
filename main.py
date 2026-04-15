@@ -102,7 +102,7 @@ def _retransmit_oldest_pending() -> None:
 ##############################################################################################
 def _rx_loop():
     """Receive loop - continuously receive data from SDR and process it."""
-    logging.info("RX loop started.")
+    logging.debug("RX loop started.")
 
     while not stop_event.is_set():
         try:
@@ -196,9 +196,9 @@ def _rx_loop():
                 len(received_bits) % conv_coder.n,
             )
 
-            conv_decoded_bits = conv_coder.decode(received_bits)
-            descrambled_bits = scrambler.apply(conv_decoded_bits)
-            fec_decoded_bits = fec_codec.rs_decode(descrambled_bits)
+            conv_decoded_bytes = conv_coder.decode(received_bits)
+            descrambled_bytes = scrambler.apply(conv_decoded_bytes)
+            fec_decoded_bits = fec_codec.decode(descrambled_bytes)
             received_datagram = Datagram.unpack(fec_decoded_bits)
 
             try:
@@ -244,11 +244,11 @@ def _rx_loop():
             time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
 
-    logging.info("RX loop stopped.")
+    logging.debug("RX loop stopped.")
 
 def _tx_loop():
     """Transmit loop - continuously check for outgoing messages and transmit them."""
-    logging.info("TX loop started.")
+    logging.debug("TX loop started.")
 
     while not stop_event.is_set():
         try:
@@ -297,15 +297,17 @@ def _tx_loop():
 
             sdr.send_signal(signal_for_transmission)
             #logging.debug("Datagram length:\t %d bytes.", len(tx_datagram.pack()))
+            #logging.debug("FEC coded data:\t %s.", fec_coded_data)
             #logging.debug("FEC coded data length:\t %d bytes.", len(fec_coded_data))
             #logging.debug("Scrambled data length:\t %d bytes.", len(scrambled_data))
-            #logging.debug("Scrambled data (first 64 bytes):\t %s", scrambled_data[:64])  # Print first 64 bytes of scrambled data for debugging
+            #logging.debug("Scrambled data:\t %s", scrambled_data)  
             #logging.debug("Conv coded data length:\t %d bits.", len(conv_coded_data))
+            #logging.debug("Conv coded data:\t %s", conv_coded_data)  # Print first 192 bits of conv coded data for debugging
             #logging.debug("Modulated signal length:\t %d symbols.", len(modulated_signal))
+            #logging.debug("Modulated signal:\t %s", modulated_signal[:24])  # Print first 24 symbols of modulated signal for debugging
             #logging.debug("Signal with Gold length:\t %d symbols.", len(signal_with_gold))
             #logging.debug("Upsampled signal length:\t %d symbols.", len(upsampled_signal))
             #logging.debug("Filtered signal length:\t %d symbols.", len(filtered_signal))
-            #logging.debug("Mean of signal for transmission:\t %.4f", np.mean(signal_for_transmission))
             #logging.debug("Signal for transmission length:\t %d symbols.", len(signal_for_transmission))
 
             if tx_datagram.get_msg_type == msgType.DATA:
@@ -325,11 +327,11 @@ def _tx_loop():
             time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
 
-    logging.info("TX loop stopped.")
+    logging.debug("TX loop stopped.")
 
 def _tui_loop():
     """TUI loop - continuously check for user input and enqueue messages to send."""
-    logging.info("TUI loop started.")
+    logging.debug("TUI loop started.")
 
     tui.render_screen()  # Initial render of TUI
 
@@ -380,11 +382,11 @@ def _tui_loop():
             continue
 
         time.sleep(0.1)  # Sleep briefly to avoid tight error loop
-    logging.info("TUI loop stopped.")
+    logging.debug("TUI loop stopped.")
         
 def _ack_timeout_loop():
     """ACK timeout loop - periodically check for pending ACKs and retransmit if necessary."""
-    logging.info("ACK timeout loop started.")
+    logging.debug("ACK timeout loop started.")
 
     while not stop_event.is_set():
         now_ms = time.time() * 1000.0
@@ -416,7 +418,7 @@ def _ack_timeout_loop():
 
         time.sleep(max(0.05, ACK_TIMEOUT_ms / 1000.0 / 2.0))
 
-    logging.info("ACK timeout loop stopped.")
+    logging.debug("ACK timeout loop stopped.")
 
 
 # ================= Start and Stop of sub threads =================
@@ -628,8 +630,6 @@ def _handle_static_plot(plot_data: dict):
 
 def calculate_expected_payload_symbols(
     config: dict,
-    conv_coder: ConvolutionalCoder,
-    modulation_name: str,
 ) -> int:
     """
     Calculate the expected number of payload symbols based on configuration and modulation type.
@@ -638,20 +638,22 @@ def calculate_expected_payload_symbols(
             modulation_name: Name of the modulation type.
         returns: Expected number of symbols in the payload after modulation and coding. 
     """
-    if modulation_name == "BPSK":
+    mod_type = config["modulation"]["type"].upper().strip()
+    if mod_type == "BPSK":
         bps = 1
-    elif modulation_name == "QPSK":
+    elif mod_type == "QPSK":
         bps = 2
     else:
-        raise ValueError(f"Unsupported modulation type for payload sizing: {modulation_name}")
+        raise ValueError(f"Unsupported modulation type for payload sizing: {mod_type}")
 
     datagram_bytes = int(config["datagram"]["total_size"])
-    rs_bytes = 2 * int(config["coding"]["rs_num_ecc"])
-    tail_bits = 2 * (conv_coder.K - 1)
+    reed_solomon_bytes = int(config["coding"]["rs_added_bytes"])
+    tail_byte = 1 # Tail bits added by convolutional coder (assumes 1 byte of tail bits, adjust if different)
 
-    conv_input_bits = (datagram_bytes + rs_bytes) * 8
-    conv_output_bits = (conv_input_bits + tail_bits) * conv_coder.n
-    
+    conv_n = int(config["coding"]["conv_n"])
+    conv_input_bits = (datagram_bytes + reed_solomon_bytes) * 8
+    conv_output_bits = (conv_input_bits + tail_byte * 8) * conv_n
+
     logging.debug(f"Calculated expected payload symbols: {conv_output_bits // bps}")
     return conv_output_bits // bps
 
@@ -673,7 +675,8 @@ if __name__ == "__main__":
     MAX_RETRIES = int(config['datagram']['max_retries'])  # Maximum number of retransmission attempts for unacknowledged messages
     ACK_TIMEOUT_ms = float(config['datagram']['ack_timeout_ms'])  # Timeout for waiting for ACKs (converted to milliseconds
     GUARD_SYMBOLS = np.zeros(int(config['transmitter']['tx_guard_symbols']), dtype=np.complex64)  # Guard symbols to insert between packets
-    EXPECTED_PAYLOAD_SYMBOLS = calculate_expected_payload_symbols(config, ConvolutionalCoder, ModulationProtocol.modulation_type)
+    EXPECTED_PAYLOAD_SYMBOLS = calculate_expected_payload_symbols(config)
+
     # ================== Logging setup ==================
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)

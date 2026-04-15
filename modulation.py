@@ -34,7 +34,7 @@ def normalize_config_modulation_name(config: dict) -> str:
 
 
 
-#@njit(cache=True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def bytes_to_symbols(bytes: npt.NDArray[np.uint8], modulation_name: str) -> npt.NDArray[np.complex64]:
     """Map bytes to complex symbols according to the specified modulation scheme."""
     mod_type = modulation_name.upper().strip()
@@ -64,7 +64,7 @@ def bytes_to_symbols(bytes: npt.NDArray[np.uint8], modulation_name: str) -> npt.
         raise ValueError(f"Unsupported modulation type: {modulation_name}")
     return out
 
-#@njit(cache=True, fastmath=False)
+@njit(cache=True, fastmath=False)
 def symbols_to_bytes(symbols: npt.NDArray[np.complex64], modulation_name: str) -> npt.NDArray[np.uint8]:
     mod_type = modulation_name.upper().strip()
 
@@ -200,8 +200,8 @@ if __name__ == "__main__":
 
     modulation_config = {
         "modulation": {
-            "type": "QPSK",
-            "order": 2,
+            "type": "BPSK",
+            "order": 1,
             "samples_per_symbol": 8
         }
     }
