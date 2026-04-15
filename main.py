@@ -141,7 +141,10 @@ def _rx_loop():
             if gold_index is None:
                 # logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
                 continue   # skip if gold code is not detected, likely not a valid signal to process
-
+            if not gold_detector.candidate_fits_frame(
+                len(fine_freq_adjusted), gold_index,EXPECTED_PAYLOAD_SYMBOLS,):
+                continue
+            
             # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             capture_plot_if_enabled(
@@ -170,17 +173,25 @@ def _rx_loop():
             )
 
             rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, best_rotation)
-            frame_synched_signal = gold_detector.remove_gold_symbols(rotated_signal, gold_index)
-            
+            capture_plot_if_enabled(
+                "rx_gold_detect",
+                "constellation",
+                rotated_signal,
+                title=f"RX Gold Detect Constellation post rotation {timestamp}",
+                stem=f"rx_gold_detect_constellation_{timestamp}",
+            )            
+            frame_synched_signal = gold_detector.remove_gold_symbols(rotated_signal, gold_index, EXPECTED_PAYLOAD_SYMBOLS)
+            received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
             
             logging.debug(
-                "Frame sync: gold_index=%s rotation=%s frame_symbols=%d",
+                "Frame sync: gold_index=%s rotation=%s frame_symbols=%d received_bits=%d bits_mod_n=%d",
                 gold_index,
                 best_rotation,
                 len(frame_synched_signal),
-)
-            
-            received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
+                len(received_bits),
+                len(received_bits) % conv_coder.n,
+            )
+
             conv_decoded_bits = conv_coder.decode(received_bits)
             descrambled_bits = scrambler.apply(conv_decoded_bits)
             fec_decoded_bits = fec_codec.rs_decode(descrambled_bits)
@@ -274,6 +285,7 @@ def _tx_loop():
                     sample_rate=float(config["modulation"]["sample_rate"]),
                     center_freq=float(config["plotter"]["center_freq"]),
                 )
+                
 
 
             # add guard symbols before and after the signal.
@@ -617,7 +629,7 @@ if __name__ == "__main__":
     MAX_RETRIES = int(config['datagram']['max_retries'])  # Maximum number of retransmission attempts for unacknowledged messages
     ACK_TIMEOUT_ms = float(config['datagram']['ack_timeout_ms'])  # Timeout for waiting for ACKs (converted to milliseconds
     GUARD_SYMBOLS = np.zeros(int(config['transmitter']['tx_guard_symbols']), dtype=np.complex64)  # Guard symbols to insert between packets
-
+    EXPECTED_PAYLOAD_SYMBOLS = 6880  # Expected number of symbols in the payload after modulation (used for correct extraction of payload in RX)
     # ================== Logging setup ==================
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)

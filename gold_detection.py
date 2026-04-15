@@ -64,31 +64,46 @@ class GoldCodeDetector:
         """Add the selected Gold code to the beginning and end of the symbol stream."""
         return np.concatenate((self.gold_symbols.get(0), signal, self.gold_symbols.get(0)))
 
-    def remove_gold_symbols(self, signal: np.ndarray, start_index: int) -> np.ndarray:
-        """Remove the Gold code from the symbol stream starting at start_index.
-            Removes the leading Gold code and, when detected, strips the trailing
-            Gold code as well so only the payload remains.
+    def remove_gold_symbols(
+        self,
+        signal: np.ndarray,
+        start_index: int,
+        payload_symbol_count: int,
+    ) -> np.ndarray:
+        """
+        Remove the leading Gold sequence and return exactly the payload symbols.
+
+        Frame layout:
+            [leading Gold][payload][trailing Gold]
+
+        Args:
+            signal: Symbol-rate complex stream
+            start_index: Detected start index of the leading Gold sequence
+            payload_symbol_count: Expected number of payload symbols
+
+        Returns:
+            Payload-only symbol stream
+
+        Raises:
+            ValueError if the requested payload region does not fit inside the buffer.
         """
         received = np.asarray(signal).astype(np.complex64, copy=False)
 
-        if start_index < 0 or (start_index + self.code_length) > len(received):
-            logger.warning("Invalid start index for removing Gold code.")
-            return received
+        gold_len = int(self.gold_symbols[0].size)
+        payload_start = int(start_index + gold_len)
+        payload_stop = int(payload_start + payload_symbol_count)
 
-        payload_start = int(start_index + self.code_length)
-        payload_stop = int(received.size)
+        if start_index < 0 or (start_index + gold_len) > received.size:
+            raise ValueError("Invalid leading Gold index.")
 
-        tail = received[payload_start:]
-        scores = self.normalized_correlation(tail)
-        candidate_indices = np.flatnonzero(scores >= self.correlation_scale_factor_threshold)
-        if candidate_indices.size > 0:
-            payload_stop = payload_start + int(candidate_indices[-1])
-
-        if payload_stop < payload_start:
-            logger.warning("Detected trailing Gold sequence before payload start.")
-            payload_stop = payload_start
+        if payload_stop > received.size:
+            raise ValueError(
+                f"Buffer too short for payload extraction: "
+                f"payload_stop={payload_stop}, available={received.size}"
+            )
 
         return received[payload_start:payload_stop]
+
 
     def normalized_correlation(self, received_signal: np.ndarray) -> np.ndarray:
         """Compute the normalized correlation between the received signal and the Gold code."""
@@ -203,35 +218,31 @@ class GoldCodeDetector:
     def detect_with_rotation(
         self,
         received_symbols: np.ndarray,
-        expected_index: int | None = None,
-        search_radius: int | None = None,
     ) -> tuple[int | None, int]:
-        """Detect the Gold code in the received symbols, accounting for possible rotations. Returns (index, rotation)."""
+        """
+        Detect the strongest Gold-code match across all allowed rotations.
+
+        Returns:
+            (best_index, best_rotation)
+
+        If no correlation peak is above threshold, returns (None, 0).
+        """
+        received = np.asarray(received_symbols).astype(np.complex64, copy=False)
+
         best_index: int | None = None
         best_peak = -1.0
         best_rotation = 0
 
         for rotation, template in self.gold_symbols.items():
-            scores = self._normalized_correlation_with_template(received_symbols, template)
-            """ p1, p2 = self._top_two_peaks_min_separation(
-                scores=scores,
-                min_separation=self.code_length,
-                threshold=self.correlation_scale_factor_threshold,
-            )
-            if p1 is None or p2 is None:
-                continue
-            index, peak = p1 """
-            
-            ## Commented out code above to allow detection of single 
-            ## peaks when only one Gold code is present (e.g., only leading or only trailing).
+            scores = self._normalized_correlation_with_template(received, template)
             if scores.size == 0:
                 continue
+
             index = int(np.argmax(scores))
             peak = float(scores[index])
+
             if peak < self.correlation_scale_factor_threshold:
                 continue
-             ## Remove until here to revert to original behavior. 
-
 
             if peak > best_peak:
                 best_peak = peak
@@ -239,6 +250,7 @@ class GoldCodeDetector:
                 best_rotation = rotation
 
         return best_index, best_rotation
+
 
     def rank_gold_candidates(
         self,
@@ -311,7 +323,29 @@ class GoldCodeDetector:
 
         candidates.sort(key=sort_key)
         return candidates[: max(1, int(top_candidates))]
+        
+    def candidate_fits_frame(
+        self,
+        signal_length: int,
+        start_index: int,
+        payload_symbol_count: int,
+        require_trailing_gold: bool = False,
+    ) -> bool:
+        """
+        Check whether a detected Gold position can fit a full frame.
 
+        Frame layout:
+            [leading Gold][payload][trailing Gold]
+        """
+        gold_len = int(self.gold_symbols[0].size)
+
+        required_symbols = gold_len + payload_symbol_count
+        if require_trailing_gold:
+            required_symbols += gold_len
+
+        return 0 <= start_index <= (signal_length - required_symbols)
+
+    
 
 if __name__ == "__main__":
     from copy import deepcopy
