@@ -126,7 +126,7 @@ def _rx_loop():
             #logging.debug("Performed fine frequency synchronization on received signal.")
 
             gold_index, best_rotation = gold_detector.detect_with_rotation(fine_freq_adjusted)
-            
+
             # === Send data to plotter if debug mode is enabled ===
             if debug_mode and plotter is not None:
                 try:
@@ -139,7 +139,7 @@ def _rx_loop():
                     pass
             
             if gold_index is None:
-                logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
+                # logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
                 continue   # skip if gold code is not detected, likely not a valid signal to process
 
             # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
@@ -172,7 +172,13 @@ def _rx_loop():
             rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, best_rotation)
             frame_synched_signal = gold_detector.remove_gold_symbols(rotated_signal, gold_index)
             
-
+            
+            logging.debug(
+                "Frame sync: gold_index=%s rotation=%s frame_symbols=%d",
+                gold_index,
+                best_rotation,
+                len(frame_synched_signal),
+)
             
             received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
             conv_decoded_bits = conv_coder.decode(received_bits)
@@ -212,7 +218,7 @@ def _rx_loop():
         except ValueError as e:
             logging.warning(f"Did not receive valid signal: {e}")
             nack_datagram = Datagram.as_nack()
-            queue_datagram(nack_datagram)
+            # queue_datagram(nack_datagram) # Bendik temp disable nack response to avoid feedback loop
             time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
         except RuntimeError as e:

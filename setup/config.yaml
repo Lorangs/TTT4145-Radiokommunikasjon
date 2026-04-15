@@ -124,5 +124,5 @@ plotter:
 plot_capture:
   enabled: true
   output_dir: "artifacts/rf_plots"
-  save_tx_burst: true
+  save_tx_burst: false
   save_rx_gold_detect: true
