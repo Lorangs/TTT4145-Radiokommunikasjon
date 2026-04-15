@@ -45,9 +45,10 @@ modulation:
   sample_rate: 1e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
 
 coding:
-  rs_num_ecc: 8                        # For 32 ECC symbols, adds 128 bytes of redundancy to the origial message.
+  rs_num_ecc: 8                        # For 32 ECC symbols, adds 128 bytes of redundancy to the origial message. for 8 ECC symbols, adds 16 bytes of redundancy. Adjust based on expected error rates and message sizes. More ECC symbols can correct more errors but also increase overhead.
+  rs_added_bytes: 8
   convolutional_K: 7                   # Memory length (constraint length) for convolutional coding. Choices are 3, 5 or 7.
-  convolutional_datarate: "1/4"        # Code rate for convolutional coding. Choices are "1/2", "1/3", "1/4".
+  convolutional_datarate: "1/2"        # Code rate for convolutional coding. Choices are "1/2", "1/3", "1/4".
   scrambler_seed: 0x5D                 # Non-zero seed for the scrambler LFSR. Must be the same for transmitter and receiver to ensure correct descrambling.
   scrambler_register_length: 8         # 
   scrambler_taps: [0, 3]              # Taps for the scrambler LFSR. Example: [0, 3] for x^7 + x^4 + 1. Must be the same for transmitter and receiver to ensure correct scrambling/descrambling.
@@ -116,7 +117,7 @@ plotter:
   psd_window: 'hann'               # Window function for PSD
   psd_scaling: 'density'           # PSD scaling type
   psd_max_points: 2048             # Max points in PSD plot
-  multi_window: False                  # If True, use multiple windows for different plots. If False, use a single window with subplots.
+  multi_window: True               # If True, use multiple windows for different plots. If False, use a single window with subplots.
 
 plot_capture:
   enabled: true
