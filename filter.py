@@ -4,8 +4,6 @@ based on the parameters specified in the configuration file.
 The RRC filter is used for pulse shaping in digital communication systems to minimize inter-symbol interference (ISI). 
 The class also provides functionality to apply the filter to a signal and to 
 write the filter coefficients to a file for hardware implementation on an SDR.
-
-The BWLPFilter class implements an optional Butterworth low-pass filter that can be applied to the received signal after coarse frequency correction.
 """
 
 import numpy as np
@@ -18,12 +16,7 @@ class RRCFilter:
     """Class to generate and manage Root Raised Cosine (RRC) filters."""
     
     def __init__(self, config: dict):
-        """Initialize RRC filter parameters and generate coefficients.
-            Args:
-                rolloff (float): Roll-off factor of the RRC filter (0 < rolloff <= 1).
-                span (int): Filter span in symbols (number of symbol durations the filter covers).
-                sps (int): Samples per symbol (oversampling factor).
-        """
+        """Initialize RRC filter parameters and generate coefficients."""
         self.hardware_filter_enable = bool(config['filter']['hardware_filter_enable'])
         self.rolloff = float(config['filter']['rrc_roll_off'])
         self.symbol_periode = 1 / float(config['modulation']['symbol_rate'])
@@ -31,11 +24,6 @@ class RRCFilter:
         self.filter_span = int(config['filter']['rrc_filter_span'])
 
         self.time_vector, self.coefficients = self._generate_rrc_filter()
-
-
-        self.scale_factor = int(config['filter']['rrc_filter_scale_factor'])
-        #self.coefficients = self.coefficients * self.scale_factor  # Scale filter coefficients to desired range
-        
         self.rc_coefficients = signal.convolve(self.coefficients, self.coefficients, mode='full')  # Combined transmit and receive filter response
     
         if self.hardware_filter_enable:
@@ -46,12 +34,10 @@ class RRCFilter:
 
     def _generate_rrc_filter(self) -> np.ndarray:
         """Generate RRC filter coefficients using commpy."""
-
-        num_taps = self.filter_span * self.sps 
-
+        num_taps = self.filter_span * self.sps
         sample_periode = self.symbol_periode / self.sps
 
-        # If hardware filtering is enabled, the total number of filer
+        # If hardware filtering is enabled, the total number of filter
         # coefficients must be divisible by 16.
         if self.hardware_filter_enable:
             time_vector = np.arange(-num_taps//2 + 0.5, num_taps//2 + 0.5) * sample_periode
@@ -61,6 +47,7 @@ class RRCFilter:
         h = np.zeros_like(time_vector)
 
         # Compute RRC filter coefficients using the standard formula fetched from Wikipedia.
+        # https://en.wikipedia.org/wiki/Root-raised-cosine_filter
         for i, t in enumerate(time_vector):
             if t == 0.0:
                 h[i] = 1 + self.rolloff * (4 / np.pi - 1)
@@ -126,40 +113,6 @@ class RRCFilter:
             logger.error(f"Error writing filter coefficients to file: {e}")
             raise e
         
-    
-
-class BWLPFilter:
-    """Optional front-end low-pass filter for complex baseband RX samples."""
-
-    def __init__(self, config: dict):
-        self.enabled = bool(config["filter"].get("butterworth_enable", False))
-        self.sample_rate = float(config["modulation"]["sample_rate"])
-        self.order = int(config["filter"].get("butterworth_order", 4))
-        self.cutoff_hz = float(config["filter"].get("butterworth_cutoff_hz", 140e3))
-
-        nyquist = 0.5 * self.sample_rate
-        if not 0 < self.cutoff_hz < nyquist:
-            raise ValueError(
-                f"butterworth_cutoff_hz must be between 0 and Nyquist ({nyquist} Hz)"
-            )
-
-        self.sos = signal.butter(
-            N=self.order,
-            Wn=self.cutoff_hz,
-            btype="lowpass",
-            fs=self.sample_rate,
-            output="sos",
-        )
-
-    def apply_filter(self, coarse_corrected_signal: np.ndarray) -> np.ndarray:
-        """Filter complex baseband RX samples after coarse frequency correction."""
-        if not self.enabled:
-            return coarse_corrected_signal
-
-        filtered = signal.sosfilt(self.sos, coarse_corrected_signal)
-        return filtered.astype(np.complex64, copy=False)
-
-
     
 
 

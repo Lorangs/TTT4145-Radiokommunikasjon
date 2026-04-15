@@ -37,8 +37,9 @@ from convolutional_coder import ConvolutionalCoder
 from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
-
-# ================= Message Handling =================
+##################################################################################
+# ============================== Message Handling ================================
+##################################################################################
 def queue_datagram(datagram: Datagram) -> bool:
     """Enqueue a datagram for transmission."""
     global tx_queue
@@ -242,29 +243,32 @@ def _tx_loop():
             if matched_filter.hardware_filter_enable:
                 filtered_signal = upsampled_signal  # Assume hardware filtering is applied by the SDR TODO: Not working as inteded
             else:
-                filtered_signal = matched_filter.apply_filter(upsampled_signal)
+                padded_signal = matched_filter.pad_signal_front_and_back(upsampled_signal)  # Pad signal to avoid edge effects from filtering
+                filtered_signal = matched_filter.apply_filter(padded_signal)
 
-            # Constellation and PSD plots when debug is enabled
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            capture_plot_if_enabled(
-                "tx_burst",
-                "constellation",
-                modulated_signal,
-                title=f"TX Burst Constellation {timestamp}",
-                stem=f"tx_burst_constellation_{timestamp}",
-            )
-            capture_plot_if_enabled(
-                "tx_burst",
-                "psd",
-                filtered_signal,
-                title=f"TX Burst PSD {timestamp}",
-                stem=f"tx_burst_psd_{timestamp}",
-                sample_rate=float(config["modulation"]["sample_rate"]),
-                center_freq=float(config["plotter"]["center_freq"]),
-            )
 
             if debug_mode:
                 logging.debug(f"TX loop got datagram from queue: {tx_datagram}")
+                
+                # Constellation and PSD plots when debug is enabled
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                capture_plot_if_enabled(
+                    "tx_burst",
+                    "constellation",
+                    modulated_signal,
+                    title=f"TX Burst Constellation {timestamp}",
+                    stem=f"tx_burst_constellation_{timestamp}",
+                )
+                capture_plot_if_enabled(
+                    "tx_burst",
+                    "psd",
+                    filtered_signal,
+                    title=f"TX Burst PSD {timestamp}",
+                    stem=f"tx_burst_psd_{timestamp}",
+                    sample_rate=float(config["modulation"]["sample_rate"]),
+                    center_freq=float(config["plotter"]["center_freq"]),
+                )
+
 
             # add guard symbols before and after the signal.
             signal_for_transmission = np.concatenate([GUARD_SYMBOLS, filtered_signal, GUARD_SYMBOLS])
