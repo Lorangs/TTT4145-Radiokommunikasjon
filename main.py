@@ -128,6 +128,7 @@ def _rx_loop():
 
             gold_index, best_rotation = gold_detector.detect_with_rotation(fine_freq_adjusted)
 
+            
             # === Send data to plotter if debug mode is enabled ===
             if debug_mode and plotter is not None:
                 try:
@@ -138,40 +139,26 @@ def _rx_loop():
                 except Exception as e:
                     logging.error(f"Error sending data to plotter: {e}")
                     pass
+        
             
-            if gold_index is None:
-                # logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
-                continue   # skip if gold code is not detected, likely not a valid signal to process
-            if not gold_detector.candidate_fits_frame(
-                len(fine_freq_adjusted), gold_index,EXPECTED_PAYLOAD_SYMBOLS,):
-                continue
-            
-            # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "constellation",
-                fine_freq_adjusted,
-                title=f"RX Gold Detect Constellation {timestamp}",
-                stem=f"rx_gold_detect_constellation_{timestamp}",
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "psd",
-                received_signal,
-                title=f"RX Gold Detect PSD {timestamp}",
-                stem=f"rx_gold_detect_psd_{timestamp}",
-                sample_rate=float(config["modulation"]["sample_rate"]),
-                center_freq=float(config["plotter"]["center_freq"]),
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "eye",
-                normalized_matched_filtered,
-                title=f"RX Gold Detect Eye Diagram {timestamp}",
-                stem=f"rx_gold_detect_eye_{timestamp}",
-                samples_per_symbol=int(config["modulation"]["samples_per_symbol"]),
-            )
+                # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "constellation",
+                    fine_freq_adjusted,
+                    title=f"RX Gold Detect Constellation {timestamp}",
+                    stem=f"rx_gold_detect_constellation_{timestamp}",
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "psd",
+                    received_signal,
+                    title=f"RX Gold Detect PSD {timestamp}",
+                    stem=f"rx_gold_detect_psd_{timestamp}",
+                    sample_rate=float(config["modulation"]["sample_rate"]),
+                    center_freq=float(config["plotter"]["center_freq"]),
+                )
 
 
                 # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
@@ -210,10 +197,14 @@ def _rx_loop():
                     logging.error(f"Error sending data to plotter: {e}")
                     pass
             
+
             if gold_index is None:
-                #logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
+                # logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
                 continue   # skip if gold code is not detected, likely not a valid signal to process
-            logging.debug("Gold code detected in received signal. Proceeding with decoding.")
+            if not gold_detector.candidate_fits_frame(
+                len(fine_freq_adjusted), gold_index,EXPECTED_PAYLOAD_SYMBOLS,):
+                continue
+
                 
             rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, best_rotation)
             capture_plot_if_enabled(
