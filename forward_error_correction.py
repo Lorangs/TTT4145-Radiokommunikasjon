@@ -19,14 +19,14 @@ logger = get_logger(__name__)
 class FCCodec:
     def __init__(self, config: dict):
         self.num_ecc = int(config['coding']['rs_num_ecc'])
-        self.rsc = RSCodec(self.num_ecc * 2)  # Initialize Reed-Solomon codec with enough ECC symbols to correct rs_num_ecc errors
+        self.rsc = RSCodec(self.num_ecc)  # Initialize Reed-Solomon codec with enough ECC symbols to correct rs_num_ecc errors
         self.last_decode_error = ""
 
     def encode(self, data: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         """Encode data using Reed-Solomon code."""
         return np.array(self.rsc.encode(data.tobytes()), dtype=np.uint8)
 
-    def rs_decode(self, encoded_data: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
+    def decode(self, encoded_data: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         """Decode data using Reed-Solomon code, correcting errors if possible."""
         try:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -42,6 +42,10 @@ class FCCodec:
 
 
 
+MAP_ECC_TO_ADDITIONAL_BYTES = {
+    8: 16,   
+    32: 128, # 32 ECC symbols can correct up to 128 byte errors
+}
 
 if __name__ == "__main__":
     from datagram import Datagram, msgType
