@@ -22,7 +22,7 @@ import atexit
 # import third party moduels
 import numpy as np
 from yaml import safe_load
-from numba import njit
+
 
 # import modules
 from chat_tui import ChatTUI
@@ -113,13 +113,14 @@ def _rx_loop():
                 continue    # skip if signal is too weak to process
             #logging.debug("Signal detected above noise floor. Proceeding with synchronization and decoding.")
 
-            filtered_signal = matched_filter.apply_filter(coarse_freq_adjusted)
+            padded_signal = matched_filter.pad_signal_front_and_back(coarse_freq_adjusted)  
+            filtered_signal = matched_filter.apply_filter(padded_signal)
             #logging.debug("Applied matched filter to received signal.")
 
-            normalized_matched_filtered = synchronizer.normalize_matched_filter_output(filtered_signal)
+            #normalized_matched_filtered = synchronizer.normalize_matched_filter_output(filtered_signal)
             #logging.debug("Normalized matched filter output for synchronization.")
 
-            time_adjusted = synchronizer.gardner_timing_synchronization(normalized_matched_filtered)
+            time_adjusted = synchronizer.gardner_timing_synchronization(filtered_signal)
             #logging.debug("Performed Gardner timing synchronization on received signal.")
 
             fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
@@ -172,6 +173,48 @@ def _rx_loop():
                 samples_per_symbol=int(config["modulation"]["samples_per_symbol"]),
             )
 
+
+                # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "constellation",
+                    fine_freq_adjusted,
+                    title=f"RX Gold Detect Constellation {timestamp}",
+                    stem=f"rx_gold_detect_constellation_{timestamp}",
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "psd",
+                    received_signal,
+                    title=f"RX Gold Detect PSD {timestamp}",
+                    stem=f"rx_gold_detect_psd_{timestamp}",
+                    sample_rate=float(config["modulation"]["sample_rate"]),
+                    center_freq=float(config["plotter"]["center_freq"]),
+                )
+                #capture_plot_if_enabled(
+                #    "rx_gold_detect",
+                #    "eye",
+                #    normalized_matched_filtered,
+                #    title=f"RX Gold Detect Eye Diagram {timestamp}",
+                #    stem=f"rx_gold_detect_eye_{timestamp}",
+                #    samples_per_symbol=int(config["modulation"]["samples_per_symbol"]),
+                #)
+
+                try:
+                    # Non-blocking put - drop if queue is full
+                    plot_data_queue.put_nowait(fine_freq_adjusted.copy())
+                except Full:
+                    pass  # Drop frame if plotter can't keep up
+                except Exception as e:
+                    logging.error(f"Error sending data to plotter: {e}")
+                    pass
+            
+            if gold_index is None:
+                #logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
+                continue   # skip if gold code is not detected, likely not a valid signal to process
+            logging.debug("Gold code detected in received signal. Proceeding with decoding.")
+                
             rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, best_rotation)
             capture_plot_if_enabled(
                 "rx_gold_detect",
@@ -292,16 +335,17 @@ def _tx_loop():
             signal_for_transmission = np.concatenate([GUARD_SYMBOLS, filtered_signal, GUARD_SYMBOLS])
 
             sdr.send_signal(signal_for_transmission)
-            logging.debug("Datagram length:\t %d bytes.", len(tx_datagram.pack()))
-            logging.debug("FEC coded data length:\t %d bytes.", len(fec_coded_data))
-            logging.debug("Scrambled data length:\t %d bytes.", len(scrambled_data))
-            logging.debug("Scrambled data (first 64 bytes):\t %s", scrambled_data[:64])  # Print first 64 bytes of scrambled data for debugging
-            logging.debug("Conv coded data length:\t %d bits.", len(conv_coded_data))
-            logging.debug("Modulated signal length:\t %d samples.", len(modulated_signal))
-            logging.debug("Signal with Gold length:\t %d samples.", len(signal_with_gold))
-            logging.debug("Upsampled signal length:\t %d samples.", len(upsampled_signal))
-            logging.debug("Filtered signal length:\t %d samples.", len(filtered_signal))
-            logging.debug("Signal for transmission length:\t %d samples.", len(signal_for_transmission))
+            #logging.debug("Datagram length:\t %d bytes.", len(tx_datagram.pack()))
+            #logging.debug("FEC coded data length:\t %d bytes.", len(fec_coded_data))
+            #logging.debug("Scrambled data length:\t %d bytes.", len(scrambled_data))
+            #logging.debug("Scrambled data (first 64 bytes):\t %s", scrambled_data[:64])  # Print first 64 bytes of scrambled data for debugging
+            #logging.debug("Conv coded data length:\t %d bits.", len(conv_coded_data))
+            #logging.debug("Modulated signal length:\t %d symbols.", len(modulated_signal))
+            #logging.debug("Signal with Gold length:\t %d symbols.", len(signal_with_gold))
+            #logging.debug("Upsampled signal length:\t %d symbols.", len(upsampled_signal))
+            #logging.debug("Filtered signal length:\t %d symbols.", len(filtered_signal))
+            #logging.debug("Mean of signal for transmission:\t %.4f", np.mean(signal_for_transmission))
+            #logging.debug("Signal for transmission length:\t %d symbols.", len(signal_for_transmission))
 
             if tx_datagram.get_msg_type == msgType.DATA:
                 _track_sent_data(tx_datagram) 

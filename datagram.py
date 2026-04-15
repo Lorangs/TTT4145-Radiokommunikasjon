@@ -3,6 +3,7 @@ This module defines the Datagram class,
 which represents a structured message format for communication.
 """
 import numpy as np
+import numpy.typing as npt
 from dataclasses import dataclass
 from enum import Enum
 import time
@@ -70,12 +71,12 @@ class Datagram():
                  msg_id: np.uint8 | None = None,
                  msg_type: msgType = msgType.DATA, 
                  timestamp_ms: np.uint32 | None = None,
-                 payload: np.ndarray = np.array([], dtype=np.uint8),
+                 payload: npt.NDArray[np.uint8] = np.array([], dtype=np.uint8),
             ):
         """Initialize datagram with payload and message type.
             Args:
                 msg_type (msgType): Type of message (DATA or ACK).
-                payload (np.ndarray): Payload data as a numpy array of uint8. If None, it will be treated as an empty payload.
+                payload (npt.NDArray[np.uint8]): Payload data as a numpy array of uint8. If None, it will be treated as an empty payload.
         """
 
         payload = np.asarray(payload, dtype=np.uint8)
@@ -152,7 +153,7 @@ class Datagram():
         payload = np.frombuffer(data, dtype=np.uint8)
         return cls(msg_id=msg_id, msg_type=msg_type, payload=payload)
 
-    def pack(self) -> np.ndarray:
+    def pack(self) -> npt.NDArray[np.uint8]:
         """Pack datagram into a single numpy array of uint8."""
         padding_length = PAYLOAD_SIZE - int(self._payload_length)
         padded_payload = np.concatenate(
@@ -171,10 +172,10 @@ class Datagram():
         ], dtype=np.uint8)
 
     @classmethod
-    def unpack(cls, data: np.ndarray) -> 'Datagram':
+    def unpack(cls, data: npt.NDArray[np.uint8]) -> 'Datagram':
         """Unpack datagram from a byte array.
         Args:
-            data (np.ndarray): Byte array containing the packed datagram.
+            data (npt.NDArray[np.uint8]): Byte array containing the packed datagram.
         Returns:
             Datagram: Unpacked datagram object.
         Raises:

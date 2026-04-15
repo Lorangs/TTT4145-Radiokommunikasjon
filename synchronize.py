@@ -577,6 +577,11 @@ if __name__ == "__main__":
     from yaml import safe_load
     from sdr_plots import StaticSDRPlotter
     from matplotlib.pyplot import show
+    from modulation import ModulationProtocol
+    from datagram import Datagram
+    from scrambler import LFSRScrambler as Scrambler
+
+
 
     try:
         with open("setup/config.yaml", 'r') as f:
@@ -585,25 +590,20 @@ if __name__ == "__main__":
         print(f"Error loading configuration: {e}")
         exit(1)
 
+    modulator = ModulationProtocol(config)
     synchronizer = Synchronizer(config)
     plotter = StaticSDRPlotter()
     filter = RRCFilter(config)
+    scrambler = Scrambler(config)
 
-    ##########################################
-    # Test signal Parameters
-    ##########################################
-    num_symbols = 256  # Number of symbols in the test signal (excluding preamble)
-    frequency_offset = 1000  # [Hz]
-    timing_offset = 10.4 # [fraction of symbol period]
-    snr_dB = 30 # [dB]
 
-    # Generate QPSK test signal
-    test_symbols = np.random.randint(0, 4, num_symbols)  # Random QPSK symbols
-    symbol_mapping = {0: 1+1j, 1: -1+1j, 2: -1-1j, 3: 1-1j}  # Gray coding for QPSK
-    modulated_signal = np.array([symbol_mapping[symbol] for symbol in test_symbols], dtype=np.complex64)
-    upsampled_signal = np.zeros(len(modulated_signal) * synchronizer.sps, dtype=np.complex64)
-    upsampled_signal[::synchronizer.sps] = modulated_signal  # Upsample by inserting zeros between symbols
-    shaped_signal = filter.apply_filter(upsampled_signal)  # Apply pulse shaping
+    datagram = Datagram.as_string("Hello, this is a test message to evaluate the synchronization algorithms.")
+    test_bytes = datagram.pack()
+    scrambled_bits = scrambler.scramble(test_bytes)
+    modulated_signal = modulator.modulate_message(scrambled_bits)
+    upsampled_signal = modulator.upsample_symbols(modulated_signal)
+
+
 
     # Add frequency offset
     time_vector = np.arange(len(shaped_signal)) / synchronizer.sample_rate
