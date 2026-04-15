@@ -16,11 +16,11 @@ datagram:
   msg_id_size: 1
   msg_type_size: 1
   timestamp_size: 4
-  payload_length_size: 1
+  payload_length_size: 1       
   payload_crc_size: 2
-  payload_size: 23             # Maximum number of bytes in a datagram. Adjust based on expected message sizes and memory constraints.
+  payload_size: 23              # Maximum number of bytes in a datagram. Adjust based on expected message sizes and memory constraints.
   header_size: 9                # Total size of the datagram header (msg_id + msg_type + timestamp + payload_length + payload_crc). Must be <= 255 to fit in a single byte length field.
-  total_size: 32              # Total size of the datagram (header + payload + CRC). Must be <= 255 to fit in a single byte length field.
+  total_size: 32                # Total size of the datagram (header + payload + CRC). Must be <= 255 to fit in a single byte length field.
 
 transmitter:
   tx_cyclic_buffer: False             # Enable/disable cyclic buffer

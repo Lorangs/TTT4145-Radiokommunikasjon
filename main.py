@@ -139,64 +139,7 @@ def _rx_loop():
                 except Exception as e:
                     logging.error(f"Error sending data to plotter: {e}")
                     pass
-        
-            
-                # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                capture_plot_if_enabled(
-                    "rx_gold_detect",
-                    "constellation",
-                    fine_freq_adjusted,
-                    title=f"RX Gold Detect Constellation {timestamp}",
-                    stem=f"rx_gold_detect_constellation_{timestamp}",
-                )
-                capture_plot_if_enabled(
-                    "rx_gold_detect",
-                    "psd",
-                    received_signal,
-                    title=f"RX Gold Detect PSD {timestamp}",
-                    stem=f"rx_gold_detect_psd_{timestamp}",
-                    sample_rate=float(config["modulation"]["sample_rate"]),
-                    center_freq=float(config["plotter"]["center_freq"]),
-                )
 
-
-                # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                capture_plot_if_enabled(
-                    "rx_gold_detect",
-                    "constellation",
-                    fine_freq_adjusted,
-                    title=f"RX Gold Detect Constellation {timestamp}",
-                    stem=f"rx_gold_detect_constellation_{timestamp}",
-                )
-                capture_plot_if_enabled(
-                    "rx_gold_detect",
-                    "psd",
-                    received_signal,
-                    title=f"RX Gold Detect PSD {timestamp}",
-                    stem=f"rx_gold_detect_psd_{timestamp}",
-                    sample_rate=float(config["modulation"]["sample_rate"]),
-                    center_freq=float(config["plotter"]["center_freq"]),
-                )
-                #capture_plot_if_enabled(
-                #    "rx_gold_detect",
-                #    "eye",
-                #    normalized_matched_filtered,
-                #    title=f"RX Gold Detect Eye Diagram {timestamp}",
-                #    stem=f"rx_gold_detect_eye_{timestamp}",
-                #    samples_per_symbol=int(config["modulation"]["samples_per_symbol"]),
-                #)
-
-                try:
-                    # Non-blocking put - drop if queue is full
-                    plot_data_queue.put_nowait(fine_freq_adjusted.copy())
-                except Full:
-                    pass  # Drop frame if plotter can't keep up
-                except Exception as e:
-                    logging.error(f"Error sending data to plotter: {e}")
-                    pass
-            
 
             if gold_index is None:
                 # logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
@@ -205,14 +148,41 @@ def _rx_loop():
                 len(fine_freq_adjusted), gold_index,EXPECTED_PAYLOAD_SYMBOLS,):
                 continue
 
+            # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            capture_plot_if_enabled(
+                "rx_gold_detect",
+                "psd",
+                coarse_freq_adjusted,
+                title=f"Coarse Frequency Adjusted PSD {timestamp}",
+                stem=f"Coarse_freq_adj_PSD_{timestamp}",
+                sample_rate=float(config["modulation"]["sample_rate"]),
+                center_freq=float(config["plotter"]["center_freq"]),
+            )
+            capture_plot_if_enabled(
+                "rx_gold_detect",
+                "eye",
+                filtered_signal,
+                title=f"Eye Diagram - filtered signal {timestamp}",
+                stem=f"rx_eye_{timestamp}",
+                samples_per_symbol=int(config["modulation"]["samples_per_symbol"]),
+            )
+            capture_plot_if_enabled(
+                "rx_gold_detect",
+                "constellation",
+                time_adjusted,
+                title=f"RX Gold Detect Constellation {timestamp}",
+                stem=f"rx_gold_detect_constellation_{timestamp}",
+
+            )
                 
             rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, best_rotation)
             capture_plot_if_enabled(
                 "rx_gold_detect",
                 "constellation",
                 rotated_signal,
-                title=f"RX Gold Detect Constellation post rotation {timestamp}",
-                stem=f"rx_gold_detect_constellation_{timestamp}",
+                title=f"Constellationpost gold rotation {timestamp}",
+                stem=f"Const_Post_Gold_Rotation_{timestamp}",
             )            
             frame_synched_signal = gold_detector.remove_gold_symbols(rotated_signal, gold_index, EXPECTED_PAYLOAD_SYMBOLS)
             received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
@@ -508,7 +478,11 @@ def _cleanup():
     """Clean up resources safely. Idempotent."""
     global _cleaned_up
 
-    with _cleanup_lock:
+    lock = globals().get("_cleanup_lock", None)
+    if lock is None:
+        return
+
+    with lock:
         if _cleaned_up:
             return
         _cleaned_up = True
@@ -648,6 +622,41 @@ def _handle_static_plot(plot_data: dict):
         logging.error(f"Error handling static plot: {e}")
 
 
+    ##################################################################################
+    # ================== Helper functions for runtime ==================
+    ###################################################################################
+
+def calculate_expected_payload_symbols(
+    config: dict,
+    conv_coder: ConvolutionalCoder,
+    modulation_name: str,
+) -> int:
+    """
+    Calculate the expected number of payload symbols based on configuration and modulation type.
+        args:   config: Configuration dictionary loaded from YAML file.
+            conv_coder: Convolutional coder instance.
+            modulation_name: Name of the modulation type.
+        returns: Expected number of symbols in the payload after modulation and coding. 
+    """
+    if modulation_name == "BPSK":
+        bps = 1
+    elif modulation_name == "QPSK":
+        bps = 2
+    else:
+        raise ValueError(f"Unsupported modulation type for payload sizing: {modulation_name}")
+
+    datagram_bytes = int(config["datagram"]["total_size"])
+    rs_bytes = 2 * int(config["coding"]["rs_num_ecc"])
+    tail_bits = 2 * (conv_coder.K - 1)
+
+    conv_input_bits = (datagram_bytes + rs_bytes) * 8
+    conv_output_bits = (conv_input_bits + tail_bits) * conv_coder.n
+    
+    logging.debug(f"Calculated expected payload symbols: {conv_output_bits // bps}")
+    return conv_output_bits // bps
+
+    
+
 
 
 if __name__ == "__main__":
@@ -664,7 +673,7 @@ if __name__ == "__main__":
     MAX_RETRIES = int(config['datagram']['max_retries'])  # Maximum number of retransmission attempts for unacknowledged messages
     ACK_TIMEOUT_ms = float(config['datagram']['ack_timeout_ms'])  # Timeout for waiting for ACKs (converted to milliseconds
     GUARD_SYMBOLS = np.zeros(int(config['transmitter']['tx_guard_symbols']), dtype=np.complex64)  # Guard symbols to insert between packets
-    EXPECTED_PAYLOAD_SYMBOLS = 6880  # Expected number of symbols in the payload after modulation (used for correct extraction of payload in RX)
+    EXPECTED_PAYLOAD_SYMBOLS = calculate_expected_payload_symbols(config, ConvolutionalCoder, ModulationProtocol.modulation_type)
     # ================== Logging setup ==================
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)

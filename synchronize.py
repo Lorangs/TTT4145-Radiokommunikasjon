@@ -431,7 +431,6 @@ class Synchronizer:
         rms_before = float(np.sqrt(np.mean(energy[selected]) + 1e-12))
         scale = 1.0 if rms_before <= 1e-12 else float(target_rms) / rms_before
         normalized = (received * scale).astype(np.complex64, copy=False)
-
         return normalized
 
     

@@ -167,7 +167,6 @@ class ModulationProtocol:
 
         if self.modulator is not None:
             return self.modulator.modulate(byte_stream)
-
         raise ValueError(f"Unsupported modulation type: {self.modulation_type}")
 
     def demodulate_signal(self, signal: np.ndarray) -> np.ndarray:

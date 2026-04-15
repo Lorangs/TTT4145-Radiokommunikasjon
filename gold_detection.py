@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from project_logger import get_logger
 logger = get_logger(__name__)
+import logging
 
 import numpy as np
 
@@ -101,7 +102,6 @@ class GoldCodeDetector:
                 f"Buffer too short for payload extraction: "
                 f"payload_stop={payload_stop}, available={received.size}"
             )
-
         return received[payload_start:payload_stop]
 
 
@@ -143,6 +143,7 @@ class GoldCodeDetector:
         )
         ref_energy = float(np.vdot(template, template).real)
         denom = np.sqrt(np.maximum(ref_energy * window_energy, 1e-12))
+        
         return (np.abs(raw) / denom).astype(np.float32, copy=False)
 
 
@@ -342,7 +343,6 @@ class GoldCodeDetector:
         required_symbols = gold_len + payload_symbol_count
         if require_trailing_gold:
             required_symbols += gold_len
-
         return 0 <= start_index <= (signal_length - required_symbols)
 
     
