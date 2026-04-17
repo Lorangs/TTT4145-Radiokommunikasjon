@@ -126,7 +126,10 @@ def _rx_loop():
             fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
             #logging.debug("Performed fine frequency synchronization on received signal.")
 
-            gold_index, best_rotation = gold_detector.detect_with_rotation(fine_freq_adjusted)
+            gold_index, best_rotation = gold_detector.detect_with_rotation(
+                fine_freq_adjusted,
+                EXPECTED_PAYLOAD_SYMBOLS,
+            )
 
             
             # === Send data to plotter if debug mode is enabled ===
@@ -729,7 +732,7 @@ if __name__ == "__main__":
     sdr = SDRTransciever(config) # must be initilized after Matched Filter module.
 
     # ================= Initialize additional constants =================
-    EXPECTED_PAYLOAD_SYMBOLS = calculate_expected_payload_symbols(config, conv_coder, modulation_protocol.modulation_type)
+    EXPECTED_PAYLOAD_SYMBOLS = calculate_expected_payload_symbols(config)
 
     # ================== Threading and synchronization primitives ==================
     stop_event: threading.Event = threading.Event()

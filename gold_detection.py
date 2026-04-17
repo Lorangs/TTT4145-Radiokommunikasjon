@@ -219,112 +219,57 @@ class GoldCodeDetector:
     def detect_with_rotation(
         self,
         received_symbols: np.ndarray,
+        payload_symbol_count: int,
     ) -> tuple[int | None, int]:
         """
-        Detect the strongest Gold-code match across all allowed rotations.
+        Detect the earliest Gold-code match that can fit a full frame.
 
         Returns:
             (best_index, best_rotation)
 
-        If no correlation peak is above threshold, returns (None, 0).
+        The candidate search scans all allowed rotations, keeps peaks above the
+        configured correlation threshold, filters out peaks that cannot be the
+        leading Gold sequence of a complete frame, and then prefers the
+        earliest valid candidate. This avoids locking onto the trailing Gold
+        sequence when both frame edges correlate strongly.
+
+        If no valid correlation peak is found, returns (None, 0).
         """
         received = np.asarray(received_symbols).astype(np.complex64, copy=False)
 
-        best_index: int | None = None
-        best_peak = -1.0
-        best_rotation = 0
+        candidates: list[tuple[int, int, float]] = []
 
         for rotation, template in self.gold_symbols.items():
             scores = self._normalized_correlation_with_template(received, template)
             if scores.size == 0:
                 continue
 
-            index = int(np.argmax(scores))
-            peak = float(scores[index])
+            order = np.argsort(scores)[::-1]
+            for idx in order:
+                peak = float(scores[idx])
+                if peak < self.correlation_scale_factor_threshold:
+                    break
 
-            if peak < self.correlation_scale_factor_threshold:
-                continue
+                start_index = int(idx)
+                if not self.candidate_fits_frame(
+                    signal_length=received.size,
+                    start_index=start_index,
+                    payload_symbol_count=payload_symbol_count,
+                    require_trailing_gold=True,
+                ):
+                    continue
 
-            if peak > best_peak:
-                best_peak = peak
-                best_index = index
-                best_rotation = rotation
+                candidates.append((start_index, rotation, peak))
 
+        if not candidates:
+            return None, 0
+
+        candidates.sort(key=lambda item: (item[0], -item[2]))
+        best_index, best_rotation, _ = candidates[0]
         return best_index, best_rotation
 
 
-    def rank_gold_candidates(
-        self,
-        symbol_stream: np.ndarray,
-        expected_index: int | None = None,
-        search_radius: int | None = None,
-        top_candidates: int = 5,
-    ) -> list[dict]:
-        received = np.asarray(symbol_stream).astype(np.complex64, copy=False)
-        candidates: list[dict] = []
-
-        for rotation, sequence in self.gold_symbols.items():
-
-            decisions = nearest_constellation_symbols(sequence, self.modulation_type)
-            scores = self.normalized_correlation(decisions)
-            if scores.size == 0:
-                continue
-
-            if expected_index is not None and search_radius is not None:
-                start = max(0, int(expected_index) - int(search_radius))
-                stop = min(int(scores.size), int(expected_index) + int(search_radius) + 1)
-            else:
-                start = 0
-                stop = int(scores.size)
-
-            if stop <= start:
-                continue
-
-            local_scores = scores[start:stop]
-            unique_indices: set[int] = set()
-
-            if expected_index is not None and start <= int(expected_index) < stop:
-                unique_indices.add(int(expected_index) - start)
-
-            top_count = min(int(max(1, top_candidates)), int(local_scores.size))
-            sorted_local = np.argsort(local_scores)[-top_count:][::-1]
-            for local_idx in sorted_local.tolist():
-                unique_indices.add(int(local_idx))
-
-            for local_idx in sorted(unique_indices):
-                index = start + int(local_idx)
-                peak = float(local_scores[local_idx])
-                candidates.append(
-                    {
-                        "phase": 0,
-                        "index": int(index),
-                        "peak": peak,
-                        "rotation": rotation,
-                        "decisions": decisions,
-                    }
-                )
-
-        if not candidates:
-            return [
-                {
-                    "phase": 0,
-                    "index": None,
-                    "peak": 0.0,
-                    "rotation": 1 + 0j,
-                    "decisions": np.array([], dtype=np.complex64),
-                }
-            ]
-
-        def sort_key(candidate: dict) -> tuple[float, float, float]:
-            if expected_index is None:
-                return (-float(candidate["peak"]), 0.0, 0.0)
-            distance = abs(int(candidate["index"]) - int(expected_index))
-            exact_bias = 0 if distance == 0 else 1
-            return (float(exact_bias), float(distance), -float(candidate["peak"]))
-
-        candidates.sort(key=sort_key)
-        return candidates[: max(1, int(top_candidates))]
-        
+      
     def candidate_fits_frame(
         self,
         signal_length: int,
