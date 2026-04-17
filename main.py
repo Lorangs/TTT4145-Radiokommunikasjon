@@ -673,7 +673,7 @@ if __name__ == "__main__":
     MAX_RETRIES = int(config['datagram']['max_retries'])  # Maximum number of retransmission attempts for unacknowledged messages
     ACK_TIMEOUT_ms = float(config['datagram']['ack_timeout_ms'])  # Timeout for waiting for ACKs (converted to milliseconds
     GUARD_SYMBOLS = np.zeros(int(config['transmitter']['tx_guard_symbols']), dtype=np.complex64)  # Guard symbols to insert between packets
-    EXPECTED_PAYLOAD_SYMBOLS = calculate_expected_payload_symbols(config, ConvolutionalCoder, ModulationProtocol.modulation_type)
+    
     # ================== Logging setup ==================
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)
@@ -725,6 +725,9 @@ if __name__ == "__main__":
     gold_detector = GoldCodeDetector(config)
     synchronizer = Synchronizer(config)
     sdr = SDRTransciever(config) # must be initilized after Matched Filter module.
+
+    # ================= Initialize additional constants =================
+    EXPECTED_PAYLOAD_SYMBOLS = calculate_expected_payload_symbols(config, conv_coder, modulation_protocol.modulation_type)
 
     # ================== Threading and synchronization primitives ==================
     stop_event: threading.Event = threading.Event()
