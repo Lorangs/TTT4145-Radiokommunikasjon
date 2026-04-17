@@ -77,8 +77,11 @@ class SDRTransciever:
     def send_signal(self, signal: np.array):
         """Send a raw signal through the SDR immediately."""
         try:
+            # Clear the previous one-shot TX buffer before queueing the next burst.
+            # Destroying the buffer immediately after tx() can cut into the burst
+            # before the hardware finishes draining it.
+            self.sdr.tx_destroy_buffer()
             self.sdr.tx(signal * (2**14))   # Scale signal back to int16 range for transmission
-            self.sdr.tx_destroy_buffer()  # Clear any existing data in the SDR's transmission buffer
         except Exception as e:
             raise Exception(f"Failed to send signal through SDR: {e}")
             

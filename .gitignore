@@ -27,3 +27,6 @@ hardware_tester_plots/*
 
 # ignore pytest cache
 .pytest_cache/
+
+# local Pluto verification harness
+pluto_verify.py
