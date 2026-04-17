@@ -49,6 +49,26 @@ class LFSRScrambler:
         return int(rng.integers(1, 1 << register_length))  # non-zero
 
 
+    def apply(self, bytes: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
+        """Scramble or descramble a packet bitstream.
+
+        For a synchronous additive scrambler, TX and RX perform the same XOR
+        operation against the same pseudo-random sequence. The caller is expected
+        to reset the register to the shared seed once per packet.
+        """
+        state = self.seed
+        out = np.empty(bytes.size, dtype=np.uint8)
+
+        for i, byte in enumerate(bytes.astype(np.uint8)):
+
+            out[i] = byte ^ state
+
+            # Shift left and insert the newly generated feedback bit into the
+            # register. The mask keeps only the configured register length.
+            state = ((state << 1) | state) & self.mask
+
+        return out
+
     def _next_bit(self, state: int) -> tuple[int, int]:
         """Generate the next bit and update the LFSR state."""
         out_bit = state & 0x1

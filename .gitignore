@@ -12,19 +12,13 @@ Channel_Simulator/*
 log/*
 artifacts/*
 
-
-# ignore initial test files
-initial_tests/*
-
 # ignore python bytecode
 __pycache__/
-
 
 #ignore filter coefficient files
 *.ftr.env
 
 # Drop outdated source files
-convolutional_coder_v2.py'
 barker_code.py
 barker_detection.py
 

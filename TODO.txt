@@ -12,3 +12,34 @@ POWER, SNR, BW, spectrum shape, BER, MSE, channels statistics, performance, comp
 - magnitude and phase of complex sample 
 - rrc filter response 
 - FFT Spectrum plot 
+
+
+
+Datastream has these constraints:
+Payload size: 23 bytes
+total datagram size: 32 bytes (including header and CRC)
+FEC coding adds 8 bytes of redundancy, with a total of 40 bytes after coding.
+FEC can correct up to 8 byte errors in the coded message.
+
+Convolutional coding:
+adds 1 byte tail, and the output is 2 bits per input bit, resulting in 82 bytes after convolutional coding.
+
+Modulation:
+BPSK modulation maps each bit to one symbol, resulting in 656 symbols after modulation.
+QPSK modulation maps 2 bits to one symbol, resulting in 328 symbols after modulation.
+
+Pad front and back with Gold Sequence, each of length 31
+BPSK: 656 + 31 + 31 = 718 symbols
+QPSK: 328 + 31 + 31 = 390
+
+Upsampling factor: 8
+BPSK: 718 * 8 = 5744 samples
+QPSK: 390 * 8 = 3120 samples
+
+Pad with filter length - 1 = 40 zeros at the end for filtering
+BPSK: 5744 + 2*40 = 5824 samples
+QPSK: 3120 + 2*40 = 3200 samples
+
+Add Guard Interval of 32 samples front and back
+BPSK: 5824 + 32 + 32 = 5888 samples
+QPSK: 3200 + 32 + 32 = 3264 samples
