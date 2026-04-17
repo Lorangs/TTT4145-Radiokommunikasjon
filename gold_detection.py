@@ -12,7 +12,7 @@ import logging
 import numpy as np
 
 from gold_code import get_gold_code_symbols
-from modulation import modulation_rotations, nearest_constellation_symbols
+from modulation import modulation_rotations
 from modulation import normalize_config_modulation_name
 
 
@@ -29,21 +29,29 @@ class GoldCodeDetector:
             code_index=code_index,
         ).astype(np.complex64, copy=False)
 
-        self.rotation_matrix = modulation_rotations(self.modulation_type) / np.sqrt(2)  # Normalize rotation matrix to keep symbol energy consistent
+        rotation_values = np.asarray(
+            modulation_rotations(self.modulation_type),
+            dtype=np.complex64,
+        )
         if self.modulation_type.upper() == "BPSK":
-            self.gold_symbols = {
-                0: gold_symbols * self.rotation_matrix[0], 
-                180: gold_symbols * self.rotation_matrix[1]
+            self.rotation_factors = {
+                0: rotation_values[0],
+                180: rotation_values[1],
             }
         elif self.modulation_type.upper() == "QPSK":
-            self.gold_symbols = {
-                0: gold_symbols * self.rotation_matrix[0],
-                90: gold_symbols * self.rotation_matrix[1],
-                180: gold_symbols * self.rotation_matrix[2],
-                270: gold_symbols * self.rotation_matrix[3],
+            self.rotation_factors = {
+                0: rotation_values[0],
+                90: rotation_values[1],
+                180: rotation_values[2],
+                270: rotation_values[3],
             }
         else:
             raise ValueError(f"Unsupported modulation type for Gold code: {self.modulation_type}")
+
+        self.gold_symbols = {
+            rotation: gold_symbols * factor
+            for rotation, factor in self.rotation_factors.items()
+        }
 
         self.code_length = code_length
         self.code_index = code_index
@@ -161,7 +169,52 @@ class GoldCodeDetector:
 
     def rotate_signal(self, signal: np.ndarray, rotation: int) -> np.ndarray:
         """Rotate the signal by the specified angle (in degrees) if it's a known rotation for the modulation type."""
-        return signal * self.rotation_matrix[rotation]
+        try:
+            factor = self.rotation_factors[int(rotation)]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported rotation {rotation} for {self.modulation_type}.") from exc
+        return signal * factor
+
+    def estimate_rotation_from_gold(
+        self,
+        received_symbols: np.ndarray,
+        start_index: int,
+    ) -> int:
+        """
+        Estimate the constellation rotation from the detected leading Gold code.
+
+        The detected Gold index tells us where the known header starts. At that
+        position we compute the complex correlation against the unrotated Gold
+        reference, take its phase, and snap the required correction to the
+        nearest allowed constellation rotation.
+
+        Returns:
+            The rotation, in degrees, to apply to the received symbol stream.
+        """
+        received = np.asarray(received_symbols).astype(np.complex64, copy=False)
+
+        gold_len = int(self.gold_symbols[0].size)
+        payload_start = int(start_index)
+        payload_stop = int(payload_start + gold_len)
+        if payload_start < 0 or payload_stop > received.size:
+            raise ValueError("Detected Gold index does not fit inside received buffer.")
+
+        received_gold = received[payload_start:payload_stop]
+        reference_gold = self.gold_symbols[0]
+        correlation = np.vdot(reference_gold, received_gold)
+        if not np.isfinite(correlation.real) or not np.isfinite(correlation.imag):
+            raise ValueError("Gold correlation produced a non-finite phase estimate.")
+        if np.abs(correlation) <= 1e-12:
+            raise ValueError("Gold correlation magnitude too small to estimate rotation.")
+
+        target_correction = np.exp(-1j * np.angle(correlation))
+        best_rotation = min(
+            self.rotation_factors,
+            key=lambda rotation: abs(
+                np.angle(target_correction * np.conj(self.rotation_factors[rotation]))
+            ),
+        )
+        return int(best_rotation)
 
     def detect_with_score(
         self, 

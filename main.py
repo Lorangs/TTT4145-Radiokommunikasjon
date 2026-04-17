@@ -126,7 +126,7 @@ def _rx_loop():
             fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
             #logging.debug("Performed fine frequency synchronization on received signal.")
 
-            gold_index, best_rotation = gold_detector.detect_with_rotation(
+            gold_index, _ = gold_detector.detect_with_rotation(
                 fine_freq_adjusted,
                 EXPECTED_PAYLOAD_SYMBOLS,
             )
@@ -150,6 +150,10 @@ def _rx_loop():
             if not gold_detector.candidate_fits_frame(
                 len(fine_freq_adjusted), gold_index,EXPECTED_PAYLOAD_SYMBOLS,):
                 continue
+            best_rotation = gold_detector.estimate_rotation_from_gold(
+                fine_freq_adjusted,
+                gold_index,
+            )
 
             # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -677,7 +681,10 @@ if __name__ == "__main__":
     SAMPLES_PER_SYMBOL = int(config['modulation']['samples_per_symbol'])
     MAX_RETRIES = int(config['datagram']['max_retries'])  # Maximum number of retransmission attempts for unacknowledged messages
     ACK_TIMEOUT_ms = float(config['datagram']['ack_timeout_ms'])  # Timeout for waiting for ACKs (converted to milliseconds
-    GUARD_SYMBOLS = np.zeros(int(config['transmitter']['tx_guard_symbols']), dtype=np.complex64)  # Guard symbols to insert between packets
+    GUARD_SYMBOLS = np.zeros(
+        int(config['transmitter']['tx_guard_symbols']) * SAMPLES_PER_SYMBOL,
+        dtype=np.complex64,
+    )  # Sample-rate guard interval inserted after upsampling/filtering.
     
     # ================== Logging setup ==================
     log_dir = "log"
