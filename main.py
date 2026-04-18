@@ -183,30 +183,71 @@ def _rx_loop():
 
             )
                 
-            rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, best_rotation)
+            ### The following section attempts to decode the payload using the best rotation estimate from the gold code.
+            ### Falls back to trying other rotations if decoding fails. 
+            ### This is to handle cases where the gold-based rotation estimate is not perfect, which can happen at low SNR.
+            selected_rotated_signal = None
+            selected_frame_synched_signal = None
+            received_datagram = None
+            successful_rotation = None
+
+            for rotation in _decode_rotation_fallback_order(
+                best_rotation,
+                modulation_protocol.modulation_type,
+            ):
+                try:
+                    rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, rotation)
+                    frame_synched_signal = gold_detector.remove_gold_symbols(
+                        rotated_signal,
+                        gold_index,
+                        EXPECTED_PAYLOAD_SYMBOLS,
+                    )
+                    received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
+
+                    logging.debug(
+                        "Frame sync: gold_index=%s tried_rotation=%s frame_symbols=%d received_bits=%d bits_mod_n=%d",
+                        gold_index,
+                        rotation,
+                        len(frame_synched_signal),
+                        len(received_bits),
+                        len(received_bits) % conv_coder.n,
+                    )
+
+                    conv_decoded_bytes = conv_coder.decode(received_bits)
+                    descrambled_bytes = scrambler.apply(conv_decoded_bytes)
+                    fec_decoded_bits = fec_codec.decode(descrambled_bytes)
+                    received_datagram = Datagram.unpack(fec_decoded_bits)
+
+                    selected_rotated_signal = rotated_signal
+                    selected_frame_synched_signal = frame_synched_signal
+                    successful_rotation = rotation
+                    break
+                except (ValueError, RuntimeError) as e:
+                    logging.debug(
+                        "Rotation decode attempt failed: gold_index=%s rotation=%s error=%s",
+                        gold_index,
+                        rotation,
+                        e,
+                    )
+                    continue
+
+            if received_datagram is None:
+                continue
+
             capture_plot_if_enabled(
                 "rx_gold_detect",
                 "constellation",
-                rotated_signal,
-                title=f"Constellationpost gold rotation {timestamp}",
-                stem=f"Const_Post_Gold_Rotation_{timestamp}",
-            )            
-            frame_synched_signal = gold_detector.remove_gold_symbols(rotated_signal, gold_index, EXPECTED_PAYLOAD_SYMBOLS)
-            received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
-            
-            logging.debug(
-                "Frame sync: gold_index=%s rotation=%s frame_symbols=%d received_bits=%d bits_mod_n=%d",
-                gold_index,
-                best_rotation,
-                len(frame_synched_signal),
-                len(received_bits),
-                len(received_bits) % conv_coder.n,
+                selected_rotated_signal,
+                title=f"Constellation post selected rotation {timestamp}",
+                stem=f"Const_Post_Selected_Rotation_{timestamp}",
             )
-
-            conv_decoded_bytes = conv_coder.decode(received_bits)
-            descrambled_bytes = scrambler.apply(conv_decoded_bytes)
-            fec_decoded_bits = fec_codec.decode(descrambled_bytes)
-            received_datagram = Datagram.unpack(fec_decoded_bits)
+            capture_plot_if_enabled(
+                "rx_gold_detect",
+                "constellation",
+                selected_frame_synched_signal,
+                title=f"Payload constellation post selected rotation {timestamp}",
+                stem=f"Payload_Const_Post_Selected_Rotation_{timestamp}",
+            )
 
             try:
                 rx_queue.put(received_datagram)
@@ -301,6 +342,7 @@ def _tx_loop():
 
             # add guard symbols before and after the signal.
             signal_for_transmission = np.concatenate([GUARD_SYMBOLS, filtered_signal, GUARD_SYMBOLS])
+            signal_for_transmission = _normalize_tx_burst(signal_for_transmission, TX_PEAK_SCALE)
 
             sdr.send_signal(signal_for_transmission)
             #logging.debug("Datagram length:\t %d bytes.", len(tx_datagram.pack()))
@@ -635,6 +677,48 @@ def _handle_static_plot(plot_data: dict):
     # ================== Helper functions for runtime ==================
     ###################################################################################
 
+def _normalize_tx_burst(signal: np.ndarray, target_peak: float) -> np.ndarray:
+    """
+    Scale one TX burst to a fixed peak amplitude before sending it to Pluto.
+    args:    
+        signal. The complex baseband signal representing the TX burst to be transmitted.
+        target_peak. The desired peak amplitude to which the signal should be normalized before transmission.
+    returns: 
+        A new complex numpy array representing the normalized TX burst, scaled to the specified target peak amplitude.
+    """
+
+    tx_signal = np.asarray(signal).astype(np.complex64, copy=False)
+    peak = float(np.max(np.abs(tx_signal))) if tx_signal.size else 0.0
+    if peak <= 0.0:
+        return tx_signal
+    return (float(target_peak) * tx_signal / peak).astype(np.complex64)
+
+def _decode_rotation_fallback_order(
+    best_rotation: int,
+    modulation_name: str,
+) -> tuple[int, ...]:
+    """
+    Return the ordered list of rotations to try during payload decode.
+
+    The Gold-based phase estimate is tried first.
+    For QPSK, the remaining quadrants are tried after that.
+    """
+    mod = modulation_name.upper().strip()
+
+    if mod == "QPSK":
+        ordered = [best_rotation, 0, 90, 180, 270]
+    elif mod == "BPSK":
+        ordered = [best_rotation, 0, 180]
+    else:
+        ordered = [best_rotation]
+
+    unique: list[int] = []
+    for rotation in ordered:
+        if rotation not in unique:
+            unique.append(rotation)
+
+    return tuple(unique)
+
 def calculate_expected_payload_symbols(
     config: dict,
 ) -> int:
@@ -685,7 +769,8 @@ if __name__ == "__main__":
         int(config['transmitter']['tx_guard_symbols']) * SAMPLES_PER_SYMBOL,
         dtype=np.complex64,
     )  # Sample-rate guard interval inserted after upsampling/filtering.
-    
+    TX_PEAK_SCALE = float(config['transmitter']['tx_peak_scale']) # Normalization factor for TX Bursts
+
     # ================== Logging setup ==================
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)
