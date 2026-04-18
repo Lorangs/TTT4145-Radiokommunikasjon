@@ -1,133 +1,124 @@
+# Logging configuration
 logging:
-  level: "DEBUG"                    # Shared repo log level. Supported: "DEBUG", "INFO", "WARNING", "ERROR".
+  level: DEBUG  # Logging level: DEBUG, INFO, WARNING, ERROR
 
+# Radio hardware settings
 radio:
-  ip_address: "ip:192.168.0.151"      # ip address of sdr radio
-  queue_size: 32                      # Maxsize of RX and TX queues. Also determines the max number of messages stored for display in the TUI.
-  debug_mode: True                   # If True, the system will run in debug mode with live plotting of signals.
+  ip_address: ip:192.168.0.151  # IP address of SDR radio
+  queue_size: 32  # Max size of RX and TX queues. Also determines the max number of messages stored for display in the TUI.
+  debug_mode: true  # If True, the system will run in debug mode with live plotting of signals.
 
-#link_control:
-#  enable_ack: true                    # true/false for ACK
-#  enable_nack: false                  # true/false for nack
-#  enable_retransmit: true             # true/false for Packet retransmit
-#  track_pending_data: true            # true/false for 
+# Link control settings
+link_control:
+  enable_ack: false  # Enable ACK mechanism
+  enable_nack: false  # Enable NACK mechanism
+  enable_retransmit: false  # Enable packet retransmission
+  track_pending_data: false  # Track pending data
 
-# These parameters are copies of the corresponding values in datagram.py. 
-# They are duplicated here to keep all configurable parameters in one place, 
-# but they must be kept consistent with the definitions in datagram.py for the system to function correctly.
+# Datagram format parameters
+# These parameters are copies of the corresponding values in datagram.py.
+# They are duplicated here to keep all configurable parameters in one place,
+# but changes should be made in both places to maintain consistency.
 datagram:
-  ack_timeout_ms: 2000
-  max_retries: 3
-  msg_id_size: 1
-  msg_type_size: 1
-  timestamp_size: 4
-  payload_length_size: 1       
-  payload_crc_size: 2
-  payload_size: 23              # Maximum number of bytes in a datagram. Adjust based on expected message sizes and memory constraints.
-  header_size: 9                # Total size of the datagram header (msg_id + msg_type + timestamp + payload_length + payload_crc). Must be <= 255 to fit in a single byte length field.
-  total_size: 32                # Total size of the datagram (header + payload + CRC). Must be <= 255 to fit in a single byte length field.
+  ack_timeout_ms: 2000  # Timeout for ACK in milliseconds
+  max_retries: 3  # Maximum number of retries
+  msg_id_size: 1  # Size of message ID in bytes
+  msg_type_size: 1  # Size of message type in bytes
+  timestamp_size: 4  # Size of timestamp in bytes
+  payload_length_size: 1  # Size of payload length in bytes
+  payload_crc_size: 2  # Size of payload CRC in bytes
+  payload_size: 23  # Size of payload in bytes
+  header_size: 9  # Size of header in bytes
+  total_size: 32  # Total size of datagram in bytes
 
+# Transmitter settings
 transmitter:
-  tx_cyclic_buffer: False             # Enable/disable cyclic buffer
-  tx_gain_dB: -20                     # range: -90 to 0 dB
-  tx_bandwidth: 1e6                   # TX bandwidth [Hz]
-  tx_carrier: 866.5e6                 # TX local oscillator (carrier frequenzy)
-  tx_buffer_size: 1024                # 2**10 samples 
-  tx_guard_symbols: 32                # Number of guard symbols (idle time) to insert between packets. Adjust based on expected channel conditions and timing requirements. More guard symbols can help with timing acquisition and reduce inter-packet interference, but also increase overhead.
-  tx_peak_scale: 0.39                 # Normalization factor for TX Burst, keps burst even(less variation at operationg point)
+  tx_cyclic_buffer: false  # Enable/disable cyclic buffer
+  tx_gain_dB: -20  # TX gain in dB, range: -90 to 0 dB
+  tx_bandwidth: 1e6  # TX bandwidth in Hz
+  tx_carrier: 866.5e6  # TX local oscillator (carrier frequency) in Hz
+  tx_buffer_size: 1024  # TX buffer size in samples (2**10)
+  tx_guard_symbols: 32  # Number of guard symbols (idle time) to insert between packets. Adjust based on expected channel conditions and timing requirements. More guard symbols can help with timing acquisition and reduce inter-packet interference, but also increase overhead.
+  tx_peak_scale: 0.39  # Normalization factor for TX Burst, keeps burst even (less variation at operating point)
 
-receiver: 
-  rx_gain_dB: 4                       # range: 0 to 73 dB
-  rx_bandwidth: 500e3                 # RX bandwidth [Hz]
-  rx_carrier: 866.5e6                 # RX local oscillator (carrier frequenzy)
-  gain_mode: 'manual'                 # "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
-  buffer_size: 32768                  # 2**15 samples      
+# Receiver settings
+receiver:
+  rx_gain_dB: 4  # RX gain in dB, range: 0 to 73 dB
+  rx_bandwidth: 500e3  # RX bandwidth in Hz
+  rx_carrier: 866.5e6  # RX local oscillator (carrier frequency) in Hz
+  gain_mode: manual  # Gain mode: "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
+  buffer_size: 32768  # RX buffer size
 
+# Modulation settings
 modulation:
-  type: "QPSK"                        # Modulation type: "PSK", "QAM", "BPSK" and "QPSK"
-  order: 4                            # Modulation order: 2 for BPSK, 4 for QPSK, 16 for 16-QAM, etc. Must be a power of 2.
-  symbol_rate: 125e3                  # Symbols per second. symbol period = 1 / symbol_rate = 4 us
-  samples_per_symbol: 8               # Samples per Symbol. Must be an integer. Determines the oversampling factor for pulse shaping and matched filtering.
-  sample_rate: 1e6                    # EDIT ONLY THROUGH SYMBOL RATE AND SAMPLES PER SYMBOL (symbol_rate * samples_per_symbol)
+  type: QPSK  # Modulation type
+  order: 4  # Modulation order
+  symbol_rate: 125e3  # Symbol rate in symbols/s
+  samples_per_symbol: 8  # Samples per symbol
+  sample_rate: 1e6  # Sample rate in Hz
 
+# Coding settings
 coding:
-  rs_num_ecc: 8                        # For 32 ECC symbols, adds 128 bytes of redundancy to the origial message. for 8 ECC symbols, adds 16 bytes of redundancy. Adjust based on expected error rates and message sizes. More ECC symbols can correct more errors but also increase overhead.
-  rs_added_bytes: 8
-  conv_K: 7                   # Memory length (constraint length) for convolutional coding. Choices are 3, 5 or 7.
-  conv_n: 2                   # Number of output bits per input bit for convolutional coding. Must be 2 for the current implementation.
-  conv_datarate: "1/2"        # Code rate for convolutional coding. Choices are "1/2", "1/3", "1/4".
-  scrambler_seed: 0x5D                 # Non-zero seed for the scrambler LFSR. Must be the same for transmitter and receiver to ensure correct descrambling.
-  scrambler_register_length: 8         # 
-  scrambler_taps: [0, 3]              # Taps for the scrambler LFSR. Example: [0, 3] for x^7 + x^4 + 1. Must be the same for transmitter and receiver to ensure correct scrambling/descrambling.
+  rs_num_ecc: 8  # Reed-Solomon number of ECC bytes
+  rs_added_bytes: 8  # Reed-Solomon added bytes
+  conv_K: 7  # Convolutional code constraint length
+  conv_n: 3  # Convolutional code n
+  conv_datarate: 1/3  # Convolutional code data rate
+  scrambler_seed: 93  # Scrambler seed
+  scrambler_register_length: 8  # Scrambler register length
+  scrambler_taps:  # Scrambler taps
+    - 0
+    - 3
 
+# Filter settings
 filter:
-  rrc_roll_off: 0.5                   # Roll-off factor (alpha) for pulse shaping filter
-  rrc_filter_span: 10                 # Filter span in symbols for RRC filter (total filter length = rrc_filter_span * samples_per_symbol)
-  hardware_filter_enable: False        # Enable/disable hardware RRC filtering on the SDR. If False, RRC filtering is done in software.
-  hardware_filter_file: "rrc_filter_coefficients.ftr"  # File to store RRC filter coefficients for hardware filtering. Only used if rrc_filtering_enable is True.
+  rrc_roll_off: 0.5  # RRC roll-off factor
+  rrc_filter_span: 10  # RRC filter span
+  hardware_filter_enable: false  # Enable hardware filter
+  hardware_filter_file: rrc_filter_coefficients.ftr  # Hardware filter file
 
+# Gold sequence settings
 gold_sequence:
-  code_length: 31                    # Supported lengths follow the implemented Gold-code families.
-  code_index: 7                      # Selects one code from the family for this link.
-  header_repeat_count: 2             # Repeat the Gold sync/header block to make packet confirmation more robust than a single 31-symbol header.
-  correlation_threshold: 0.75        # Detection threshold for symbol-domain Gold correlation.
-  decode_candidate_count: 1          # Max number of full payload decode attempts per run after header search.
-  decode_candidate_min_peak: 0.7      # Minimum Gold peak required before attempting a full decode on a candidate.
+  code_length: 31  # Gold code length
+  code_index: 7  # Gold code index
+  correlation_threshold: 0.75  # Correlation threshold
 
+# Synchronization settings
 synchronization:
-  nfft: 16384                            # Higher FFT resolution reduces residual CFO before the fine loop, which matters more over the air.
-  signal_bw: 1e6                         # Loop bandwidth for Costas loop in Hz. Determines how quickly the loop can track frequency and phase variations. A common choice is around 1-5% of the symbol rate, so for a symbol rate of 125 kHz, a bandwidth of 2500 Hz (2% of symbol rate) is a reasonable starting point. Adjust based on expected frequency offsets and noise conditions.
-  signal_power_threshold_dB: 66.3        # Threshold level above the measured noise floor in dB for considering a signal presence.
-  costas_zeta: 0.707                     # Damping factor for Costas loop. A value of 0.707 (1/sqrt(2)) provides critical damping, which is a common choice for stable and responsive loop behavior. Adjust based on desired trade-off between stability and responsiveness.
-  costas_K0: 1.0                         # VCO gain for costas loop.    
-  costas_alpha: 0.02                     # Proportional gain for Costas loop (alternative to loop bandwidth). Adjust based on desired loop response. Ignored if costas_loop_bw is set.
-  costas_Kp: 0.005                       # Proportional gain for the Costas loop.
-  costas_Ki: 1.0e-5                      # Integral gain for the Costas loop.
-  costas_gate_power_percentile_low: 15.0   # Lower power percentile used for Costas update gating on the active symbol region.
+  nfft: 16384  # FFT size. Higher FFT resolution reduces residual CFO before the fine loop, which matters more over the air.
+  signal_power_threshold_dB: 66.3  # Threshold level above the measured noise floor in dB for considering a signal presence.
+  costas_zeta: 0.707  # Damping factor for Costas loop. A value of 0.707 (1/sqrt(2)) provides critical damping, which is a common choice for stable and responsive loop behavior. Adjust based on desired trade-off between stability and responsiveness.
+  costas_K0: 1.0  # VCO gain for Costas loop.
+  costas_alpha: 0.02  # Proportional gain for Costas loop (alternative to loop bandwidth). Adjust based on desired loop response. Ignored if costas_loop_bw is set.
+  costas_Kp: 0.005  # Proportional gain for the Costas loop.
+  costas_Ki: 1.0e-05  # Integral gain for the Costas loop.
+  costas_gate_power_percentile_low: 15.0  # Lower power percentile used for Costas update gating on the active symbol region.
   costas_gate_power_percentile_high: 85.0  # Upper power percentile used for Costas update gating on the active symbol region.
-  gardner_Kp: 0.004                        # Proportional gain for the Gardner timing loop.
-  gardner_Ki: 2.0e-5                       # Integral gain for the Gardner timing loop.
-  gardner_gate_energy_percentile_low: 25.0   # Lower energy percentile used for Gardner update gating.
+  gardner_Kp: 0.004  # Proportional gain for the Gardner timing loop.
+  gardner_Ki: 2.0e-05  # Integral gain for the Gardner timing loop.
+  gardner_gate_energy_percentile_low: 25.0  # Lower energy percentile used for Gardner update gating.
   gardner_gate_energy_percentile_high: 90.0  # Upper energy percentile used for Gardner update gating.
-  gardner_gate_energy_scale_low: 3.0        # Scale factor applied to the lower Gardner gate percentile.
-  gardner_gate_energy_scale_high: 3.0       # Scale factor applied to the upper Gardner gate percentile.
-  header_phase_search_offset_samples: 4     # Search radius, in matched-filter samples, around the detected header start during timing acquisition.
-  preamble_repeat_count: 12                 # Number of repeated short Gold-code blocks sent before the repeated Gold header for direct timing/CFO acquisition.
-  timing_preamble_block_symbols: 31         # Length of the timing-friendly alternating BPSK acquisition block before repetition.
-  preamble_cfo_enable: true                 # If true, estimate a coarse phase slope from the repeated preamble before Gardner/Costas.
-  preamble_cfo_min_score: 0.45              # Minimum repeated-preamble score required before applying preamble-based CFO correction.
-  preamble_symbol_min_score: 0.50           # Minimum repeated-preamble symbol-domain score required before applying a post-Gardner symbol-slip correction.
-  preamble_symbol_search_radius_symbols: 4  # Symbol-domain search radius around the expected repeated preamble start after Gardner timing recovery.
-  header_fractional_timing_enable: true     # Search small fractional sample offsets around the current symbol lattice and keep the one with the best header metric.
-  header_fractional_timing_max_offset_samples: 1.0  # Maximum plus/minus fractional sample offset tested against the known header.
-  header_fractional_timing_step_samples: 0.25  # Step size, in matched-filter samples, for header-driven fractional timing refinement.
-  preamble_cfo_max_abs_slope_rad_per_symbol: 0.05  # Clamp preamble-estimated phase slope to avoid over-correcting noisy captures.
-  header_alignment_candidate_count: 4       # Number of strongest preamble-alignment candidates to rescore before choosing the packet start.
-  timing_header_search_radius_symbols: 8    # Symbol-domain search radius used for header slip correction and Gold search around the expected header index after timing recovery.
-  timing_header_candidate_count: 5          # Number of nearby symbol-domain Gold candidates to rank for final decode attempts.
-  gardner_tracking_payload_symbols: 64      # Number of payload symbols Gardner is allowed to track after the header before holding timing fixed.
-  short_equalizer_enable: true              # Train a short symbol-rate equalizer on the known preamble/header before Costas to reduce residual ISI.
-  short_equalizer_tap_count: 5              # Odd tap count for the short trained equalizer.
-  short_equalizer_regularization: 1.0e-3    # Ridge regularization used when solving the equalizer taps.
-  short_equalizer_apply_if_improved: true   # Only keep the trained equalizer when it lowers training error on the known symbols.
-  short_equalizer_train_on_preamble: true   # Use the repeated preamble symbols as equalizer training data.
-  short_equalizer_train_on_header: true     # Use the repeated Gold header symbols as equalizer training data.
-  short_equalizer_min_training_symbols: 32  # Minimum valid known symbols required before training the equalizer.
+  gardner_gate_energy_scale_low: 3.0  # Scale factor applied to the lower Gardner gate percentile.
+  gardner_gate_energy_scale_high: 3.0  # Scale factor applied to the higher Gardner gate percentile.
+  gardner_tracking_payload_symbols: 64  # Number of payload symbols used for Gardner tracking.
+  short_equalizer_enable: true  # Enable short equalizer
+  short_equalizer_regularization: 0.001  # Regularization parameter for short equalizer
 
+# Plotter settings
 plotter:
-  num_rows: 200                    # Number of rows in waterfall display
-  center_freq: 866.5e6             # Center frequency for display (Hz)
-  time_plot_samples: 500           # Number of samples to show in time plot
-  update_interval: 100             # Milliseconds between plot updates
-  psd_nperseg: 1024                # FFT size for PSD calculation
-  max_constellation_points: 500   # Max points in constellation diagram
-  psd_window: 'hann'               # Window function for PSD
-  psd_scaling: 'density'           # PSD scaling type
-  psd_max_points: 2048             # Max points in PSD plot
-  multi_window: True               # If True, use multiple windows for different plots. If False, use a single window with subplots.
+  num_rows: 200  # Number of rows in the plot
+  center_freq: 866.5e6  # Center frequency in Hz
+  time_plot_samples: 500  # Number of samples for time plot
+  update_interval: 100  # Update interval in milliseconds
+  psd_nperseg: 1024  # Number of points per segment for PSD
+  max_constellation_points: 500  # Maximum number of constellation points
+  psd_window: hann  # Window function for PSD
+  psd_scaling: density
+  psd_max_points: 2048
+  multi_window: false
 
 plot_capture:
   enabled: true
-  output_dir: "artifacts/rf_plots"
+  output_dir: artifacts/rf_plots
   save_tx_burst: false
   save_rx_gold_detect: true

@@ -31,9 +31,11 @@ from datagram import Datagram, msgType
 from sdr_transciever import SDRTransciever
 from filter import RRCFilter
 from gold_detection import GoldCodeDetector
+from equalizer import equalize_from_known_header
 from synchronize import Synchronizer
 from forward_error_correction import FCCodec
 from convolutional_coder import ConvolutionalCoder
+from interleaver import Interleaver
 from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
@@ -157,6 +159,14 @@ def _rx_loop():
 
             # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            eye_window = _extract_eye_window(
+                filtered_signal,
+                gold_index,
+                EXPECTED_PAYLOAD_SYMBOLS,
+                SAMPLES_PER_SYMBOL,
+            )
+            eye_offset = _best_eye_offset(eye_window, SAMPLES_PER_SYMBOL)
+            aligned_eye_window = eye_window[eye_offset:]
             capture_plot_if_enabled(
                 "rx_gold_detect",
                 "psd",
@@ -169,10 +179,10 @@ def _rx_loop():
             capture_plot_if_enabled(
                 "rx_gold_detect",
                 "eye",
-                filtered_signal,
-                title=f"Eye Diagram - filtered signal {timestamp}",
-                stem=f"rx_eye_{timestamp}",
-                samples_per_symbol=int(config["modulation"]["samples_per_symbol"]),
+                aligned_eye_window,
+                title=f"Aligned Eye Diagram - matched filter {timestamp}",
+                stem=f"rx_eye_aligned_{timestamp}",
+                samples_per_symbol=SAMPLES_PER_SYMBOL,
             )
             capture_plot_if_enabled(
                 "rx_gold_detect",
@@ -191,14 +201,24 @@ def _rx_loop():
             received_datagram = None
             successful_rotation = None
 
+            def apply_equalizer(rotated_signal: np.ndarray) -> np.ndarray:
+                if not EQUALIZER_ENABLED:
+                    return rotated_signal
+                return equalize_from_known_header(
+                    rotated_signal,
+                    gold_index,
+                    gold_detector.gold_symbols[0],
+                )
+
             for rotation in _decode_rotation_fallback_order(
                 best_rotation,
                 modulation_protocol.modulation_type,
             ):
                 try:
                     rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, rotation)
+                    equalized_signal = apply_equalizer(rotated_signal)
                     frame_synched_signal = gold_detector.remove_gold_symbols(
-                        rotated_signal,
+                        equalized_signal,
                         gold_index,
                         EXPECTED_PAYLOAD_SYMBOLS,
                     )
@@ -215,10 +235,11 @@ def _rx_loop():
 
                     conv_decoded_bytes = conv_coder.decode(received_bits)
                     descrambled_bytes = scrambler.apply(conv_decoded_bytes)
-                    fec_decoded_bits = fec_codec.decode(descrambled_bytes)
+                    interleaved_bytes = interleaver.deinterleave(descrambled_bytes)
+                    fec_decoded_bits = fec_codec.decode(interleaved_bytes)
                     received_datagram = Datagram.unpack(fec_decoded_bits)
 
-                    selected_rotated_signal = rotated_signal
+                    selected_rotated_signal = equalized_signal
                     selected_frame_synched_signal = frame_synched_signal
                     successful_rotation = rotation
                     break
@@ -248,6 +269,20 @@ def _rx_loop():
                 title=f"Payload constellation post selected rotation {timestamp}",
                 stem=f"Payload_Const_Post_Selected_Rotation_{timestamp}",
             )
+            capture_plot_if_enabled(
+                "rx_gold_detect",
+                "symbol_eye",
+                selected_frame_synched_signal.real,
+                title=f"Payload Symbol Eye I {timestamp}",
+                stem=f"Payload_Symbol_Eye_I_{timestamp}",
+            )
+            capture_plot_if_enabled(
+                "rx_gold_detect",
+                "symbol_eye",
+                selected_frame_synched_signal.imag,
+                title=f"Payload Symbol Eye Q {timestamp}",
+                stem=f"Payload_Symbol_Eye_Q_{timestamp}",
+            )
 
             try:
                 rx_queue.put(received_datagram)
@@ -259,19 +294,22 @@ def _rx_loop():
 
             if received_datagram.get_msg_type == msgType.DATA:
                 logging.info(f"Received datagram: {received_datagram}")
-                ack_datagram = Datagram.as_ack(msg_id=received_datagram.get_msg_id)
-                queue_datagram(ack_datagram)
+                if ACK_ENABLED:
+                    ack_datagram = Datagram.as_ack(msg_id=received_datagram.get_msg_id)
+                    queue_datagram(ack_datagram)
       
             # mark message as acknowledged if ACK received, so it won't be retransmitted.
             elif received_datagram.get_msg_type == msgType.ACK:
                 logging.info(f"Received ACK for msg_ID: {received_datagram.get_msg_id}")
-                _ack_received(int(received_datagram.get_msg_id))
+                if PENDING_TRACKING_ENABLED:
+                    _ack_received(int(received_datagram.get_msg_id))
             
 
             # retransmit the previous sent message.
             elif received_datagram.get_msg_type == msgType.NACK:
                 logging.info(f"Received NACK. Retransmitting oldest pending message if any.")
-                _retransmit_oldest_pending()
+                if RETRANSMIT_ENABLED:
+                    _retransmit_oldest_pending()
                 
             else:
                 logging.warning(f"Received message with unknown type: {received_datagram.get_msg_type}")
@@ -279,8 +317,9 @@ def _rx_loop():
                 
         except ValueError as e:
             logging.warning(f"Did not receive valid signal: {e}")
-            nack_datagram = Datagram.as_nack()
-            # queue_datagram(nack_datagram) # Bendik temp disable nack response to avoid feedback loop
+            if NACK_ENABLED:
+                nack_datagram = Datagram.as_nack()
+                queue_datagram(nack_datagram)
             time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
         except RuntimeError as e:
@@ -303,7 +342,8 @@ def _tx_loop():
             tx_datagram: Datagram = tx_queue.get(timeout=0.1) # Wait for message to send
 
             fec_coded_data = fec_codec.encode(tx_datagram.pack())
-            scrambled_data = scrambler.apply(fec_coded_data)
+            interleaved_data = interleaver.interleave(fec_coded_data)
+            scrambled_data = scrambler.apply(interleaved_data)
             conv_coded_data = conv_coder.encode(scrambled_data)
             modulated_signal = modulation_protocol.modulate_message(conv_coded_data)
             signal_with_gold = gold_detector.add_gold_symbols(modulated_signal)
@@ -359,7 +399,10 @@ def _tx_loop():
             #logging.debug("Filtered signal length:\t %d symbols.", len(filtered_signal))
             #logging.debug("Signal for transmission length:\t %d symbols.", len(signal_for_transmission))
 
-            if tx_datagram.get_msg_type == msgType.DATA:
+            if (
+                tx_datagram.get_msg_type == msgType.DATA
+                and PENDING_TRACKING_ENABLED
+            ):
                 _track_sent_data(tx_datagram) 
             
             time.sleep(0.1)  # Sleep briefly to allow SDR to process transmission
@@ -438,6 +481,10 @@ def _ack_timeout_loop():
     logging.debug("ACK timeout loop started.")
 
     while not stop_event.is_set():
+        if not RETRANSMIT_ENABLED:
+            time.sleep(0.1)
+            continue
+
         now_ms = time.time() * 1000.0
         to_retransmit: list[tuple[int, Datagram, int]] = []
         to_remove: list[int] = []
@@ -653,6 +700,11 @@ def _handle_static_plot(plot_data: dict):
                 int(plot_data.get('samples_per_symbol', config['modulation']['samples_per_symbol'])),
                 title=title,
             )
+        elif plot_type == 'symbol_eye':
+            fig = static_plotter.plot_symbol_eye(
+                data,
+                title=title,
+            )
 
         if fig is None:
             return
@@ -692,6 +744,53 @@ def _normalize_tx_burst(signal: np.ndarray, target_peak: float) -> np.ndarray:
     if peak <= 0.0:
         return tx_signal
     return (float(target_peak) * tx_signal / peak).astype(np.complex64)
+
+def _best_eye_offset(samples: np.ndarray, samples_per_symbol: int) -> int:
+    """
+    Pick the sample offset that gives the strongest symbol-energy separation for an eye plot.
+    """
+    sample_array = np.asarray(samples)
+    if samples_per_symbol <= 0 or sample_array.size < samples_per_symbol * 4:
+        return 0
+
+    best_offset = 0
+    best_score = -np.inf
+
+    for offset in range(samples_per_symbol):
+        decimated = sample_array[offset::samples_per_symbol]
+        if decimated.size < 8:
+            continue
+
+        score = float(np.mean(np.abs(decimated) ** 2))
+        if score > best_score:
+            best_score = score
+            best_offset = offset
+
+    return best_offset
+
+def _extract_eye_window(
+    filtered_signal: np.ndarray,
+    gold_index: int,
+    expected_payload_symbols: int,
+    samples_per_symbol: int,
+    eye_symbols_margin: int = 16,
+) -> np.ndarray:
+    """
+    Crop a matched-filtered sample window around the detected frame for eye plotting.
+
+    The frame start is detected after timing recovery in symbol units, so this crop is an
+    approximate sample-domain window around the same region of the matched-filter output.
+    """
+    gold_len = len(gold_detector.gold_symbols[0])
+    total_symbols = gold_len + expected_payload_symbols + gold_len
+
+    start_symbol = max(0, int(gold_index) - int(eye_symbols_margin))
+    stop_symbol = int(gold_index) + total_symbols + int(eye_symbols_margin)
+
+    start_sample = start_symbol * int(samples_per_symbol)
+    stop_sample = min(len(filtered_signal), stop_symbol * int(samples_per_symbol))
+
+    return np.asarray(filtered_signal)[start_sample:stop_sample]
 
 def _decode_rotation_fallback_order(
     best_rotation: int,
@@ -770,7 +869,15 @@ if __name__ == "__main__":
         dtype=np.complex64,
     )  # Sample-rate guard interval inserted after upsampling/filtering.
     TX_PEAK_SCALE = float(config['transmitter']['tx_peak_scale']) # Normalization factor for TX Bursts
-
+    link_control_config = config.get("link_control", {})
+    ACK_ENABLED = bool(link_control_config.get("enable_ack", True))
+    NACK_ENABLED = bool(link_control_config.get("enable_nack", False))
+    RETRANSMIT_ENABLED = bool(link_control_config.get("enable_retransmit", True))
+    PENDING_TRACKING_ENABLED = bool(link_control_config.get("track_pending_data", True))
+    EQUALIZER_ENABLED = bool(config["synchronization"].get("short_equalizer_enable", True))
+    EQUALIZER_REGULARIZATION = float(
+    config["synchronization"].get("short_equalizer_regularization", 1.0e-3)
+)
     # ================== Logging setup ==================
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)
@@ -814,6 +921,7 @@ if __name__ == "__main__":
 
     # ================= Initialize Modules with configuration =================
     modulation_protocol = ModulationProtocol(config)
+    interleaver = Interleaver(config)
     scrambler = LFSRScrambler(config)
     fec_codec = FCCodec(config)
     conv_coder = ConvolutionalCoder(config)
