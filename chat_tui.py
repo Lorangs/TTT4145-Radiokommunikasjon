@@ -42,7 +42,7 @@ class ChatTUI:
         print("=" * 80)
         print("Commands: /quit to exit.")
         
-    def add_message(self, datagram: Datagram):
+    def add_message(self, datagram: Datagram, received: bool = False):
         """Add a message to the chat display
         Args:
             datagram: Datagram object containing message and metadata
@@ -55,7 +55,8 @@ class ChatTUI:
                 message_text = message_text
 
             timestamp = datetime.now().strftime("%H:%M:%S")
-            display_message = f"[{timestamp}][S]\t{message_text}"
+            status = "R" if received else "S"
+            display_message = f"[{timestamp}][{status}]\t{message_text}"
             self.messages.append(display_message)
 
         else:

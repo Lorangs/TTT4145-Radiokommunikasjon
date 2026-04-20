@@ -426,7 +426,7 @@ def _tui_loop():
                 while not rx_queue.empty():
                     try:
                         received_datagram: Datagram = rx_queue.get_nowait()
-                        tui.add_message(received_datagram)
+                        tui.add_message(received_datagram, received=True)
                         logging.debug(f"TUI processed received datagram ID: {received_datagram.get_msg_id}")
                     except Empty:
                         break  # No more messages to process
