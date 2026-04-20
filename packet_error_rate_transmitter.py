@@ -34,7 +34,7 @@ from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
 
-NUMBER_OF_DATAGRAMS = 100000
+NUMBER_OF_DATAGRAMS = 1000
 TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
 STAGES = (
@@ -165,6 +165,8 @@ def _tx_loop():
             sdr.send_signal(signal_for_transmission)
             _inc_tx_sent()
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
+
+            time.sleep(0.05)
         except Empty:
             continue  # No message to send, loop again
         except RuntimeError as e:
@@ -173,7 +175,7 @@ def _tx_loop():
             break
         except Exception as e:
             logging.error(f"Error: {e}")
-            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+            time.sleep(0.05)  # Sleep briefly to avoid tight error loop
             continue
 
     logging.debug("TX loop stopped.")

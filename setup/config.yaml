@@ -34,11 +34,11 @@ datagram:
 # Transmitter settings
 transmitter:
   tx_cyclic_buffer: false  # Enable/disable cyclic buffer
-  tx_gain_dB: -20  # TX gain in dB, range: -90 to 0 dB
+  tx_gain_dB: 0  # TX gain in dB, range: -90 to 0 dB
   tx_bandwidth: 1e6  # TX bandwidth in Hz
   tx_carrier: 866.5e6  # TX local oscillator (carrier frequency) in Hz
   tx_buffer_size: 1024  # TX buffer size in samples (2**10)
-  tx_guard_symbols: 64  # Number of guard symbols (idle time) to insert between packets. Adjust based on expected channel conditions and timing requirements. More guard symbols can help with timing acquisition and reduce inter-packet interference, but also increase overhead.
+  tx_guard_symbols: 32  # Number of guard symbols (idle time) to insert between packets. Adjust based on expected channel conditions and timing requirements. More guard symbols can help with timing acquisition and reduce inter-packet interference, but also increase overhead.
   tx_peak_scale: 0.39  # Normalization factor for TX Burst, keeps burst even (less variation at operating point)
 
 # Receiver settings
@@ -51,8 +51,8 @@ receiver:
 
 # Modulation settings
 modulation:
-  type: QPSK  # Modulation type
-  order: 4  # Modulation order
+  type: QPSK          # Modulation type
+  order: 4            # Modulation order
   symbol_rate: 125e3  # Symbol rate in symbols/s
   samples_per_symbol: 8  # Samples per symbol
   sample_rate: 1e6  # Sample rate in Hz
