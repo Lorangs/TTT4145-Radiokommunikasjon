@@ -1,19 +1,19 @@
 # Logging configuration
 logging:
-  level: error  # Logging level: DEBUG, INFO, WARNING, ERROR
+  level: ERROR  # Logging level: DEBUG, INFO, WARNING, ERROR
 
 # Radio hardware settings
 radio:
   ip_address: ip:192.168.0.151  # IP address of SDR radio
-  queue_size: 32  # Max size of RX and TX queues. Also determines the max number of messages stored for display in the TUI.
+  queue_size: 1000  # Max size of RX and TX queues. Also determines the max number of messages stored for display in the TUI.
   debug_mode: false  # If True, the system will run in debug mode with live plotting of signals.
 
 # Link control settings
 link_control:
-  enable_ack: true  # Enable ACK mechanism
-  enable_nack: false  # Enable NACK mechanism
-  enable_retransmit: true  # Enable packet retransmission
-  track_pending_data: true  # Track pending data
+  enable_ack: False  # Enable ACK mechanism
+  enable_nack: False  # Enable NACK mechanism
+  enable_retransmit: False  # Enable packet retransmission
+  track_pending_data: False  # Track pending data
 
 # Datagram format parameters
 # These parameters are copies of the corresponding values in datagram.py.
@@ -36,7 +36,7 @@ transmitter:
   tx_cyclic_buffer: false  # Enable/disable cyclic buffer
   tx_gain_dB: 0  # TX gain in dB, range: -90 to 0 dB
   tx_bandwidth: 1e6  # TX bandwidth in Hz
-  tx_carrier: 866.5e6  # TX local oscillator (carrier frequency) in Hz
+  tx_carrier: 868e6  # TX local oscillator (carrier frequency) in Hz
   tx_buffer_size: 1024  # TX buffer size in samples (2**10)
   tx_guard_symbols: 64  # Number of guard symbols (idle time) to insert between packets. Adjust based on expected channel conditions and timing requirements. More guard symbols can help with timing acquisition and reduce inter-packet interference, but also increase overhead.
   tx_peak_scale: 0.39  # Normalization factor for TX Burst, keeps burst even (less variation at operating point)

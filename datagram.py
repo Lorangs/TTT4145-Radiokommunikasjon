@@ -118,7 +118,8 @@ class Datagram():
                     text: str, 
                     msg_id: np.uint8 | None = None,
                     msg_type: msgType = msgType.DATA, 
-                    encoding: str = 'utf-8'
+                    encoding: str = 'utf-8',
+                    timestamp_ms: np.uint32 | None = None
                     ) -> 'Datagram':
         """
         Create a datagram from a text string.
@@ -132,13 +133,14 @@ class Datagram():
             Datagram object
         """
         payload = np.frombuffer(text.encode(encoding), dtype=np.uint8)
-        return cls(msg_id=msg_id, msg_type=msg_type, payload=payload)
+        return cls(msg_id=msg_id, timestamp_ms=timestamp_ms, msg_type=msg_type, payload=payload)
     
     @classmethod
     def as_bytes(cls, 
                    data: bytes, 
                    msg_id: np.uint8 | None = None,
-                   msg_type: msgType = msgType.DATA
+                   msg_type: msgType = msgType.DATA,
+                   timestamp_ms: np.uint32 | None = None
                    ) -> 'Datagram':
         """
         Create a datagram from raw bytes.

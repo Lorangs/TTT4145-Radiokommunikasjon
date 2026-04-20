@@ -147,7 +147,10 @@ def _rx_loop():
                 # logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
                 continue   # skip if gold code is not detected, likely not a valid signal to process
             if not gold_detector.candidate_fits_frame(
-                len(fine_freq_adjusted), gold_index,EXPECTED_PAYLOAD_SYMBOLS,):
+                len(fine_freq_adjusted), 
+                gold_index,
+                EXPECTED_PAYLOAD_SYMBOLS
+            ):
                 continue
             best_rotation = gold_detector.estimate_rotation_from_gold(
                 fine_freq_adjusted,
@@ -277,16 +280,16 @@ def _rx_loop():
                 stem=f"rx_payload_symbol_eye_q_after_selected_rotation_{timestamp}",
             )
 
-            try:
-                rx_queue.put(received_datagram)
-            except Full:
-                logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
-                continue
-
             tui_refresh_event.set()  # Signal TUI to refresh display
 
             if received_datagram.get_msg_type == msgType.DATA:
                 logging.info(f"Received datagram: {received_datagram}")
+                try:
+                    rx_queue.put(received_datagram)
+                except Full:
+                    logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
+                    continue
+
                 if ACK_ENABLED:
                     ack_datagram = Datagram.as_ack(msg_id=received_datagram.get_msg_id)
                     queue_datagram(ack_datagram)
