@@ -49,24 +49,23 @@ class LFSRScrambler:
         return int(rng.integers(1, 1 << register_length))  # non-zero
 
 
-    def apply(self, bytes: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
+
+    def apply(self, data: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         """Scramble or descramble a packet bitstream.
 
         For a synchronous additive scrambler, TX and RX perform the same XOR
         operation against the same pseudo-random sequence. The caller is expected
         to reset the register to the shared seed once per packet.
         """
+        arr = np.asarray(data, dtype=np.uint8)
+        if arr.ndim != 1:
+            raise ValueError(f"Expected 1D uint8 array, got shape={arr.shape}")
+
+        out = np.empty_like(arr)
         state = self.seed
-        out = np.empty(bytes.size, dtype=np.uint8)
-
-        for i, byte in enumerate(bytes.astype(np.uint8)):
-
-            out[i] = byte ^ state
-
-            # Shift left and insert the newly generated feedback bit into the
-            # register. The mask keeps only the configured register length.
-            state = ((state << 1) | state) & self.mask
-
+        for i, byte in enumerate(arr):
+            prn, state = self._next_byte(state)
+            out[i] = byte ^ prn
         return out
 
     def _next_bit(self, state: int) -> tuple[int, int]:
@@ -92,17 +91,7 @@ class LFSRScrambler:
             b |= (bit << k)
         return np.uint8(b), state
 
-    def apply(self, data: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
-        arr = np.asarray(data, dtype=np.uint8)
-        if arr.ndim != 1:
-            raise ValueError(f"Expected 1D uint8 array, got shape={arr.shape}")
 
-        out = np.empty_like(arr)
-        state = self.seed
-        for i, byte in enumerate(arr):
-            prn, state = self._next_byte(state)
-            out[i] = byte ^ prn
-        return out
 
 # Example usage
 if __name__ == "__main__":
