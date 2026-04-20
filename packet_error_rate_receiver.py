@@ -36,6 +36,7 @@ from project_logger import configure_project_logging, get_configured_log_level
 NUMBER_OF_DATAGRAMS = 100000
 TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
+SPINNER = ['|', '/', '-', '\\']
 
 
 def generate_test_datagrams(num_datagrams: int) -> list[Datagram]:
@@ -208,13 +209,31 @@ def _rx_loop():
 
     logging.debug("RX loop stopped.")
 
+def _tui_loop():
+    """TUI loop - continuously refresh the terminal user interface."""
+    logging.debug("TUI loop started.")
+    i = 0
+    num_spinner_states = len(SPINNER)
+    while not stop_event.is_set():
+        try:
+            print("\033c", end="")  # Clear terminal
+            print(f"({SPINNER[i % num_spinner_states]})")
+            i += 1
+            time.sleep(0.5)  # Adjust refresh rate as needed
+            
+        except Exception as e:
+            logging.error(f"Error in TUI loop: {e}")
+            continue
+    logging.debug("TUI loop stopped.")
+
 
 
 # ================= Start and Stop of sub threads =================
 def start():
     """Start the SDR Chat Application."""
-    global rx_thread, tx_thread, tui_thread, ack_timeout_thread
-    
+    global rx_thread, tui_thread
+    logging.info("Starting SDR Chat Application...")
+
     if sdr.connect():  
         synchronizer.set_noise_floor(sdr.measure_noise_floor_dB())
     else:
@@ -224,7 +243,7 @@ def start():
     try:
         stop_event.clear()
         rx_thread = threading.Thread(target=_rx_loop, daemon=True, name="RX_Thread")
-     
+        tui_thread = threading.Thread(target=_tui_loop, daemon=True, name="TUI_Thread")
         rx_thread.start()
         tui_thread.start()
         return True
@@ -241,14 +260,17 @@ def stop():
     logging.info("Stopping SDR Chat Application...")
     stop_event.set()
 
-    for name, thread in (("RX", rx_thread), ("TUI", tui_thread)):
-        if thread and thread.is_alive():
-            try:
-                thread.join(timeout=2.0)
-                if thread.is_alive():
-                    logging.warning(f"{name} thread did not stop within timeout")
-            except Exception as e:
-                logging.error(f"Error waiting for {name} thread: {e}")
+
+    try:
+        rx_thread.join(timeout=2.0)
+        if rx_thread.is_alive():
+            logging.warning(f"RX thread did not stop within timeout")
+        tui_thread.join(timeout=2.0)
+        if tui_thread.is_alive():
+            logging.warning(f"TUI thread did not stop within timeout")
+        
+    except Exception as e:
+        logging.error(f"Error waiting for threads: {e}")
 
     # clear references
     rx_thread = None 
@@ -273,7 +295,7 @@ def finalize_result_once():
             break
 
     per = num_datagram_errors(test_arr, received_datagrams)
-    print(f"Sent {len(test_arr)} datagrams, received {len(received_datagrams)} datagrams, with {per} datagram errors.")
+    print(f"\nSent {len(test_arr)} datagrams, received {len(received_datagrams)} datagrams, with {per} datagram errors.")
 
 def _signal_handler(signum, frame):
     """Handle termination signals for graceful shutdown."""
@@ -299,12 +321,11 @@ def _cleanup():
     stop()
 
     # Drain queues
-    for q in (rx_queue):
-        while not q.empty():
-            try:
-                q.get_nowait()
-            except Empty:
-                break
+    while not rx_queue.empty():
+        try:
+            rx_queue.get_nowait()
+        except Empty:
+            break
 
     # Disconnect SDR
     try:
@@ -471,7 +492,6 @@ if __name__ == "__main__":
     fec_codec = FCCodec(config)
     conv_coder = ConvolutionalCoder(config)
     matched_filter = RRCFilter(config)
-    tui = ChatTUI(config)
     gold_detector = GoldCodeDetector(config)
     synchronizer = Synchronizer(config)
     sdr = SDRTransciever(config) # must be initilized after Matched Filter module.
@@ -484,7 +504,6 @@ if __name__ == "__main__":
     tui_refresh_event: threading.Event = threading.Event()
     rx_thread: threading.Thread = None
     tui_thread: threading.Thread = None
-
     _cleaned_up = False
     _cleanup_lock = threading.Lock()
 

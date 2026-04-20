@@ -37,6 +37,39 @@ from project_logger import configure_project_logging, get_configured_log_level
 NUMBER_OF_DATAGRAMS = 100000
 TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
+STAGES = (
+    "Generating Datagrams",
+    "Transmitting Datagrams",
+)
+SPINNER_FRAMES = ("|", "/", "-", "\\")
+
+def _reset_tx_progress(total: int) -> None:
+    global tx_total_messages, tx_sent_messages
+    with progress_lock:
+        tx_total_messages = int(total)
+        tx_sent_messages = 0
+
+
+def _inc_tx_sent() -> None:
+    global tx_sent_messages
+    with progress_lock:
+        tx_sent_messages += 1
+
+
+def _tx_progress_snapshot() -> tuple[int, int]:
+    with progress_lock:
+        return tx_sent_messages, tx_total_messages
+
+
+def _format_progress_bar(done: int, total: int, width: int = 40) -> str:
+    if total <= 0:
+        return f"[{'-' * width}]   0.00% (0/0)"
+    done = max(0, min(done, total))
+    filled = int((done / total) * width)
+    bar = "#" * filled + "-" * (width - filled)
+    pct = (done / total) * 100.0
+    return f"[{bar}] {pct:6.2f}% ({done}/{total})"
+
 
 def generate_test_datagrams(num_datagrams: int) -> list[Datagram]:
     datagrams = []
@@ -130,6 +163,7 @@ def _tx_loop():
             signal_for_transmission = _normalize_tx_burst(signal_for_transmission, TX_PEAK_SCALE)
 
             sdr.send_signal(signal_for_transmission)
+            _inc_tx_sent()
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
         except Empty:
             continue  # No message to send, loop again
@@ -145,13 +179,7 @@ def _tx_loop():
     logging.debug("TX loop stopped.")
 
 
-STAGES = (
-    "Generating Datagrams",
-    "Transmitting Datagrams",
-    "Receiving Datagrams",
-    "Calculating Error Rates",
-)
-SPINNER_FRAMES = ("|", "/", "-", "\\")
+
 
 
 def _set_stage(stage_name: str):
@@ -172,47 +200,47 @@ def _mark_all_done():
 def _tui_loop():
     """Render PER test progress in terminal with rotating spinner."""
     frame_idx = 0
-    while not stop_event.is_set():
-        with stage_lock:
-            idx = current_stage_idx
-            done_snapshot = stage_done.copy()
+    try:
+        while not stop_event.is_set():
+            with stage_lock:
+                idx = current_stage_idx
+                done_snapshot = stage_done.copy()
 
-        # Clear screen + home cursor
+            sent, total = _tx_progress_snapshot()
+
+            sys.stdout.write("\033[2J\033[H")
+            sys.stdout.write("PER Test Progress\n")
+            sys.stdout.write("=================\n")
+
+            spinner = SPINNER_FRAMES[frame_idx % len(SPINNER_FRAMES)]
+            frame_idx += 1
+
+            for i, label in enumerate(STAGES):
+                if done_snapshot[i]:
+                    suffix = "(done)"
+                elif i == idx:
+                    suffix = f"({spinner})"
+                else:
+                    suffix = "( )"
+                sys.stdout.write(f"- {label} {suffix}\n")
+
+            sys.stdout.write("\n")
+            sys.stdout.write(f"Transmitted: {_format_progress_bar(sent, total)}\n")
+
+            sys.stdout.flush()
+            time.sleep(0.12)
+    finally:
         sys.stdout.write("\033[2J\033[H")
-        sys.stdout.write("PER Test Progress\n")
-        sys.stdout.write("=================\n")
-
-        spinner = SPINNER_FRAMES[frame_idx % len(SPINNER_FRAMES)]
-        frame_idx += 1
-
-        for i, label in enumerate(STAGES):
-            if done_snapshot[i]:
-                suffix = "(done)"
-            elif i == idx:
-                suffix = f"({spinner})"
-            else:
-                suffix = "( )"
-            sys.stdout.write(f"- {label} {suffix}\n")
-
         sys.stdout.flush()
-        time.sleep(0.12)
 
-    # Final static render
-    with stage_lock:
-        done_snapshot = stage_done.copy()
-    sys.stdout.write("\033[2J\033[H")
-    sys.stdout.write("PER Test Progress\n")
-    sys.stdout.write("=================\n")
-    for i, label in enumerate(STAGES):
-        suffix = "(done)" if done_snapshot[i] else "( )"
-        sys.stdout.write(f"- {label} {suffix}\n")
-    sys.stdout.flush()
 
 # ================= Start and Stop of sub threads =================
 def start():
     """Start the SDR Chat Application."""
-    global rx_thread, tx_thread, tui_thread, ack_timeout_thread
+    global  tx_thread, tui_thread, ack_timeout_thread
     
+
+
     if sdr.connect():  
         synchronizer.set_noise_floor(sdr.measure_noise_floor_dB())
     else:
@@ -220,11 +248,12 @@ def start():
         return False
     
     try:
+
         stop_event.clear()
         tx_thread = threading.Thread(target=_tx_loop, daemon=True, name="TX_Thread")
         tui_thread = threading.Thread(target=_tui_loop, daemon=True, name="TUI_Thread")
         
-        rx_thread.start()
+
         tx_thread.start()
         tui_thread.start()
         return True
@@ -234,14 +263,13 @@ def start():
         stop_event.set()
         return False
 
-
 def stop():
     """Stop the SDR Chat Application."""
-    global rx_thread, tx_thread, tui_thread, ack_timeout_thread
+    global tx_thread, tui_thread, ack_timeout_thread
     logging.info("Stopping SDR Chat Application...")
     stop_event.set()
 
-    for name, thread in (("RX", rx_thread), ("TX", tx_thread), ("TUI", tui_thread)):
+    for name, thread in (("TX", tx_thread), ("TUI", tui_thread)):
         if thread and thread.is_alive():
             try:
                 thread.join(timeout=2.0)
@@ -251,7 +279,7 @@ def stop():
                 logging.error(f"Error waiting for {name} thread: {e}")
 
     # clear references
-    rx_thread = None
+
     tx_thread = None  
     tui_thread = None
 
@@ -279,12 +307,12 @@ def _cleanup():
     stop()
 
     # Drain queues
-    for q in (tx_queue):
-        while not q.empty():
-            try:
-                q.get_nowait()
-            except Empty:
-                break
+
+    while not tx_queue.empty():
+        try:
+            tx_queue.get_nowait()
+        except Empty:
+            break
 
     # Disconnect SDR
     try:
@@ -518,6 +546,9 @@ if __name__ == "__main__":
     tx_thread: threading.Thread = None
     tui_thread: threading.Thread = None
 
+    progress_lock = threading.Lock()
+    tx_total_messages = 0
+    tx_sent_messages = 0
     stage_lock = threading.Lock()
     current_stage_idx = 0
     stage_done = [False] * len(STAGES)
@@ -537,14 +568,15 @@ if __name__ == "__main__":
             _set_stage("Generating Datagrams")
             test_arr = generate_test_datagrams(NUMBER_OF_DATAGRAMS)
 
+            _reset_tx_progress(len(test_arr))
+
             _set_stage("Transmitting Datagrams")
             for dgram in test_arr:
                 queue_datagram(dgram)
 
-            while not tx_queue.empty():
+            while (not tx_queue.empty()) and (not stop_event.is_set()):
                 time.sleep(1)  # Wait for all messages to be transmitted
   
-            _set_stage("Receiving Datagrams")
             time.sleep(2)
 
             _mark_all_done()
