@@ -1,9 +1,9 @@
 """
-implementation of reed-solomon codes and convolutional codes for forward error correction (FEC)
+Reed-Solomon forward-error-correction wrapper used as the outer block code.
 
-For 32 ECC symbols, the algorithm can correct up to 128 byte errors in the original message.
-For 16 ECC symbols. The algorithm adds 64 bytes of redundancy to the original message.
-For 8 ECC symbols, it adds 32 bytes of redundancy
+This module applies ``reedsolo.RSCodec(rs_num_ecc)`` to the full datagram byte
+vector. Defined by ``rs_num_ecc = 8``, so the codec
+adds 8 parity bytes to each 32-byte datagram before the next processing stage.
 """
 
 import contextlib
@@ -44,7 +44,7 @@ class FCCodec:
 
 MAP_ECC_TO_ADDITIONAL_BYTES = {
     8: 16,   
-    32: 128, # 32 ECC symbols can correct up to 128 byte errors
+    32: 128,
 }
 
 if __name__ == "__main__":
