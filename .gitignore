@@ -30,3 +30,6 @@ hardware_tester_plots/*
 
 # local Pluto verification harness
 pluto_verify.py
+
+# ignore report method notes
+REPORT_METHOD_NOTES.md

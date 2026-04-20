@@ -36,6 +36,8 @@ from interleaver import Interleaver
 from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
+chat_history_lock = threading.Lock()
+
 ##################################################################################
 # ============================== Message Handling ================================
 ##################################################################################
@@ -49,6 +51,26 @@ def queue_datagram(datagram: Datagram) -> bool:
     except Full:
         logging.error(f"Failed to queue datagram ID {datagram.get_msg_id}. TX queue is full.")
         return False
+
+def _append_chat_history(datagram: Datagram, received: bool) -> None:
+    """Append user-visible DATA messages to the session chat history."""
+    if datagram.get_msg_type != msgType.DATA:
+        return
+
+    direction = "RECV" if received else "SENT"
+    payload_text = datagram.payload_text(trim_padding=True)
+    payload_text = payload_text.replace("\r", "\\r").replace("\n", "\\n")
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    try:
+        with chat_history_lock:
+            with open(log_file, "a", encoding="utf-8") as history_file:
+                history_file.write(
+                    f"[{timestamp}] [{direction}] "
+                    f"ID:{int(datagram.get_msg_id)} {payload_text}\n"
+                )
+    except Exception as e:
+        logging.error(f"Error writing chat history: {e}")
 
 def _find_pending_index(msg_id: int) -> int | None:
     for i, (pending_msg_id, _, _, _) in enumerate(pending_ack):
@@ -171,7 +193,7 @@ def _rx_loop():
                 title=f"RX PSD After Coarse Frequency Correction {timestamp}",
                 stem=f"rx_psd_after_coarse_frequency_correction_{timestamp}",
                 sample_rate=float(config["modulation"]["sample_rate"]),
-                center_freq=float(config["plotter"]["center_freq"]),
+                center_freq=float(config["receiver"]["rx_carrier"]),
             )
             capture_plot_if_enabled(
                 "rx_gold_detect",
@@ -287,6 +309,7 @@ def _rx_loop():
 
             if received_datagram.get_msg_type == msgType.DATA:
                 logging.info(f"Received datagram: {received_datagram}")
+                _append_chat_history(received_datagram, received=True)
                 if ACK_ENABLED:
                     ack_datagram = Datagram.as_ack(msg_id=received_datagram.get_msg_id)
                     queue_datagram(ack_datagram)
@@ -368,7 +391,7 @@ def _tx_loop():
                     title=f"TX Framed Burst PSD Before Guard Insertion {timestamp}",
                     stem=f"tx_framed_burst_psd_before_guard_insertion_{timestamp}",
                     sample_rate=float(config["modulation"]["sample_rate"]),
-                    center_freq=float(config["plotter"]["center_freq"]),
+                    center_freq=float(config["transmitter"]["tx_carrier"]),
                 )
                 
 
@@ -450,12 +473,14 @@ def _tui_loop():
                     sliced_user_input = user_input[: int(config['datagram']['payload_size'])]
                     datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
                     queue_datagram(datagram)
+                    _append_chat_history(datagram, received=False)
                     user_input = user_input[int(config['datagram']['payload_size']) :]  # Remove the part that was sent
                 
                 # Final slice (or if input was already short enough)
                 sliced_user_input = user_input
                 datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
                 queue_datagram(datagram)
+                _append_chat_history(datagram, received=False)
                 tui.add_message(datagram)  # Add sent message to TUI display
                 tui.render_screen()  # Update TUI display after sending message
     
@@ -727,7 +752,15 @@ def _handle_static_plot(plot_data: dict):
             fig = static_plotter.plot_constellation(data, title=title)
         elif plot_type == 'psd':
             sample_rate = float(plot_data.get('sample_rate', config['modulation']['sample_rate']))
-            center_freq = float(plot_data.get('center_freq', config['plotter']['center_freq']))
+            center_freq = float(
+                plot_data.get(
+                    'center_freq',
+                    config.get('receiver', {}).get(
+                        'rx_carrier',
+                        config.get('plotter', {}).get('center_freq', 0.0),
+                    ),
+                )
+            )
             fig = static_plotter.plot_psd(data, sample_rate, center_freq=center_freq, title=title)
         elif plot_type == 'eye':
             fig = static_plotter.plot_eye_diagram(

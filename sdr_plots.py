@@ -703,7 +703,12 @@ class LivePlotWorker(QObject):
         # Extract configuration parameters
         plotter_config = config.get('plotter', {})
         self.sample_rate = float(config['modulation']['sample_rate'])
-        self.center_freq = float(plotter_config.get('center_freq', 866.5e6))
+        self.center_freq = float(
+            config.get('receiver', {}).get(
+                'rx_carrier',
+                plotter_config.get('center_freq', 866.5e6),
+            )
+        )
         self.num_rows = int(plotter_config.get('num_rows', 200))
         self.time_plot_samples = int(plotter_config.get('time_plot_samples', 500))
         self.psd_nperseg = int(plotter_config.get('psd_nperseg', 1024))
@@ -822,7 +827,12 @@ class LiveSDRPlotter(QMainWindow):
         # Extract configuration
         plotter_config = config.get('plotter', {})
         self.sample_rate = float(config['modulation']['sample_rate'])
-        self.center_freq = float(plotter_config.get('center_freq', 866.5e6))
+        self.center_freq = float(
+            config.get('receiver', {}).get(
+                'rx_carrier',
+                plotter_config.get('center_freq', 866.5e6),
+            )
+        )
         self.update_interval = int(plotter_config.get('update_interval', 100))
         self.time_plot_samples = int(plotter_config.get('time_plot_samples', 500))
         self.fft_size = int(plotter_config.get('psd_nperseg', 1024))

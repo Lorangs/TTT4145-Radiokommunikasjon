@@ -1,12 +1,12 @@
 # Logging configuration
 logging:
-  level: error  # Logging level: DEBUG, INFO, WARNING, ERROR
+  level: INFO  # Logging level: DEBUG, INFO, WARNING, ERROR
 
 # Radio hardware settings
 radio:
   ip_address: ip:192.168.0.151  # IP address of SDR radio
   queue_size: 32  # Max size of RX and TX queues. Also determines the max number of messages stored for display in the TUI.
-  debug_mode: false  # If True, the system will run in debug mode with live plotting of signals.
+  debug_mode: true  # If True, the system will run in debug mode with live plotting of signals.
 
 # Link control settings
 link_control:
