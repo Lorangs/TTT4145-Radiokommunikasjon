@@ -5,12 +5,16 @@ import os
 import sys
 import time
 import logging
-import select
 import threading
 from queue import Queue, Empty, Full
 from datetime import datetime
 import signal
 import atexit
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import select
 
 # import third party moduels
 import numpy as np
@@ -419,9 +423,6 @@ def _tui_loop():
     while not stop_event.is_set():
         try:
 
-            # Wait for either: screen refresh event OR stdin input (max 0.5s timeout)
-            ready_to_read, _, _ = select.select([sys.stdin], [], [], 0.1)
-            
             if tui_refresh_event.is_set():
                 while not rx_queue.empty():
                     try:
@@ -433,8 +434,8 @@ def _tui_loop():
                 tui.render_screen()  # Update TUI display
                 tui_refresh_event.clear()  # Reset event
 
-            if ready_to_read:
-                user_input = sys.stdin.readline().strip()
+            user_input = _poll_user_input()
+            if user_input is not None:
                 if user_input.lower() == "/quit":
                     logging.info("User requested to quit. Stopping application...")
                     stop_event.set()
@@ -464,6 +465,51 @@ def _tui_loop():
 
         time.sleep(0.1)  # Sleep briefly to avoid tight error loop
     logging.debug("TUI loop stopped.")
+
+
+_windows_input_buffer = ""
+
+
+def _poll_user_input() -> str | None:
+    """Read one terminal line without blocking the TUI loop."""
+    global _windows_input_buffer
+
+    if os.name != "nt":
+        ready_to_read, _, _ = select.select([sys.stdin], [], [], 0.1)
+        if ready_to_read:
+            return sys.stdin.readline().strip()
+        return None
+
+    if not msvcrt.kbhit():
+        return None
+
+    while msvcrt.kbhit():
+        char = msvcrt.getwch()
+
+        if char in ("\r", "\n"):
+            completed = _windows_input_buffer
+            _windows_input_buffer = ""
+            print()
+            return completed.strip()
+
+        if char == "\003":
+            raise KeyboardInterrupt
+
+        if char == "\b":
+            if _windows_input_buffer:
+                _windows_input_buffer = _windows_input_buffer[:-1]
+                print("\b \b", end="", flush=True)
+            continue
+
+        if char in ("\x00", "\xe0"):
+            if msvcrt.kbhit():
+                msvcrt.getwch()
+            continue
+
+        _windows_input_buffer += char
+        print(char, end="", flush=True)
+
+    return None
         
 def _ack_timeout_loop():
     """ACK timeout loop - periodically check for pending ACKs and retransmit if necessary."""
