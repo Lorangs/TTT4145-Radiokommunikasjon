@@ -185,7 +185,7 @@ class Datagram():
         if len(data) != TOTAL_SIZE:
             raise ValueError(
                 f"Data length must be exactly {TOTAL_SIZE} bytes "
-                f"({HEADER_SIZE}+{PAYLOAD_SIZE})."
+                f"Got: {len(data)} bytes."
             )
 
         msg_id = np.uint8(data[0])

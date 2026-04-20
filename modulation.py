@@ -135,6 +135,7 @@ def modulation_rotations(modulation_name: str) -> tuple[complex, ...]:
         return (1 + 0j, -0 + 1j, -1 - 0j, 0 - 1j)
     else:
         raise ValueError(f"Unsupported modulation type: {modulation_name}")
+    
 
 
 class ModulationProtocol:
@@ -181,14 +182,6 @@ class ModulationProtocol:
 
         raise ValueError(f"Unsupported modulation type: {self.modulation_type}")
 
-
-    def upsample_symbols(self, symbols: np.ndarray) -> np.ndarray:
-        upsampled = np.zeros(symbols.size * self.samples_per_symbol, dtype=np.complex64)
-        upsampled[::self.samples_per_symbol] = symbols.astype(np.complex64, copy=False)
-        return upsampled
-
-    def downsample_signal(self, signal: np.ndarray) -> np.ndarray:
-        return signal[::self.samples_per_symbol]
 
 
 if __name__ == "__main__":

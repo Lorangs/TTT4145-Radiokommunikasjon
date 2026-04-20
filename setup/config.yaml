@@ -35,7 +35,7 @@ receiver:
   rx_bandwidth: 500e3                 # RX bandwidth [Hz]
   rx_carrier: 866.5e6                 # RX local oscillator (carrier frequenzy)
   gain_mode: 'manual'                 # "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
-  buffer_size: 32768                  # 2**15 samples      
+  buffer_size: 16384                  # 2**14 samples      
 
 modulation:
   type: "QPSK"                        # Modulation type: "PSK", "QAM", "BPSK" and "QPSK"
@@ -64,14 +64,14 @@ gold_sequence:
   code_length: 31                    # Supported lengths follow the implemented Gold-code families.
   code_index: 7                      # Selects one code from the family for this link.
   header_repeat_count: 2             # Repeat the Gold sync/header block to make packet confirmation more robust than a single 31-symbol header.
-  correlation_threshold: 0.75        # Detection threshold for symbol-domain Gold correlation.
+  correlation_threshold: 200        # Detection threshold for symbol-domain Gold correlation.
   decode_candidate_count: 1          # Max number of full payload decode attempts per run after header search.
   decode_candidate_min_peak: 0.7      # Minimum Gold peak required before attempting a full decode on a candidate.
 
 synchronization:
   nfft: 16384                  # Higher FFT resolution reduces residual CFO before the fine loop, which matters more over the air.
   signal_bw: 1e6                  # Loop bandwidth for Costas loop in Hz. Determines how quickly the loop can track frequency and phase variations. A common choice is around 1-5% of the symbol rate, so for a symbol rate of 125 kHz, a bandwidth of 2500 Hz (2% of symbol rate) is a reasonable starting point. Adjust based on expected frequency offsets and noise conditions.
-  signal_power_threshold_dB: 66.3     # Threshold level above the measured noise floor in dB for considering a signal presence.
+  signal_power_threshold_dB: 70     # Threshold level above the measured noise floor in dB for considering a signal presence.
   costas_zeta: 0.707                     # Damping factor for Costas loop. A value of 0.707 (1/sqrt(2)) provides critical damping, which is a common choice for stable and responsive loop behavior. Adjust based on desired trade-off between stability and responsiveness.
   costas_K0: 1.0                         # VCO gain for costas loop.    
   costas_alpha: 0.02                    # Proportional gain for Costas loop (alternative to loop bandwidth). Adjust based on desired loop response. Ignored if costas_loop_bw is set.
@@ -121,7 +121,8 @@ plotter:
   multi_window: True               # If True, use multiple windows for different plots. If False, use a single window with subplots.
 
 plot_capture:
-  enabled: true
+  enabled: True
   output_dir: "artifacts/rf_plots"
-  save_tx_burst: false
-  save_rx_gold_detect: true
+  save_tx_burst: False
+  save_rx_gold_detect: True
+

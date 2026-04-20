@@ -111,95 +111,94 @@ def _rx_loop():
             coarse_freq_adjusted = synchronizer.coarse_frequenzy_synchronization(received_signal)
             if coarse_freq_adjusted is None:
                 continue    # skip if signal is too weak to process
-            #logging.debug("Signal detected above noise floor. Proceeding with synchronization and decoding.")
-
+            
+            #coarse_fig = static_plotter.plot_constellation(
+            #    coarse_freq_adjusted, 
+            #    title=f"RX Coarse Freq Adjusted Constellation {datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            #)
+            #save_figure_to_file(
+            #    coarse_fig, 
+            #    stem=f"rx_coarse_freq_adjusted_constellation_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            #    output_dir="artifacts/coarse_freq"
+            #    )
+            
             padded_signal = matched_filter.pad_signal_front_and_back(coarse_freq_adjusted)  
             filtered_signal = matched_filter.apply_filter(padded_signal)
-            #logging.debug("Applied matched filter to received signal.")
-
-            #normalized_matched_filtered = synchronizer.normalize_matched_filter_output(filtered_signal)
-            #logging.debug("Normalized matched filter output for synchronization.")
-
-            time_adjusted = synchronizer.gardner_timing_synchronization(filtered_signal)
-            #logging.debug("Performed Gardner timing synchronization on received signal.")
-
-            fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
-            #logging.debug("Performed fine frequency synchronization on received signal.")
-
-            gold_index, best_rotation = gold_detector.detect_with_rotation(fine_freq_adjusted)
-
+            filtered_fig = static_plotter.plot_constellation(
+                filtered_signal, 
+                title=f"RX Filtered Constellation {datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            )
+            save_figure_to_file(
+                filtered_fig, 
+                stem=f"rx_filtered_constellation_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                output_dir="artifacts/filtered"
+                )
             
+            fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(filtered_signal)
+
             # === Send data to plotter if debug mode is enabled ===
-            if debug_mode and plotter is not None:
+            if debug_mode:
                 try:
                     # Non-blocking put - drop if queue is full
                     plot_data_queue.put_nowait(fine_freq_adjusted.copy())
+                    
                 except Full:
                     pass  # Drop frame if plotter can't keep up
                 except Exception as e:
                     logging.error(f"Error sending data to plotter: {e}")
                     pass
 
-
-            if gold_index is None:
-                # logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
-                continue   # skip if gold code is not detected, likely not a valid signal to process
-            if not gold_detector.candidate_fits_frame(
-                len(fine_freq_adjusted), gold_index,EXPECTED_PAYLOAD_SYMBOLS,):
-                continue
-
             # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "psd",
-                coarse_freq_adjusted,
-                title=f"Coarse Frequency Adjusted PSD {timestamp}",
-                stem=f"Coarse_freq_adj_PSD_{timestamp}",
-                sample_rate=float(config["modulation"]["sample_rate"]),
-                center_freq=float(config["plotter"]["center_freq"]),
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "eye",
-                filtered_signal,
-                title=f"Eye Diagram - filtered signal {timestamp}",
-                stem=f"rx_eye_{timestamp}",
-                samples_per_symbol=int(config["modulation"]["samples_per_symbol"]),
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "constellation",
-                time_adjusted,
-                title=f"RX Gold Detect Constellation {timestamp}",
-                stem=f"rx_gold_detect_constellation_{timestamp}",
 
+
+            gold_index, branch, correlation = gold_detector.timing_estimate(fine_freq_adjusted)
+            downsampled_signal = gold_detector.downsample_and_crop(fine_freq_adjusted, gold_index, branch)
+            print(f"length of downsampled signal: {len(downsampled_signal)}")
+
+            downsampled_fig = static_plotter.plot_constellation(
+                downsampled_signal,
+                title=f"RX Downsampled Signal Constellation {timestamp}"
             )
-                
-            rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, best_rotation)
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "constellation",
-                rotated_signal,
-                title=f"Constellationpost gold rotation {timestamp}",
-                stem=f"Const_Post_Gold_Rotation_{timestamp}",
-            )            
-            frame_synched_signal = gold_detector.remove_gold_symbols(rotated_signal, gold_index, EXPECTED_PAYLOAD_SYMBOLS)
-            received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
-            
-            logging.debug(
-                "Frame sync: gold_index=%s rotation=%s frame_symbols=%d received_bits=%d bits_mod_n=%d",
-                gold_index,
-                best_rotation,
-                len(frame_synched_signal),
-                len(received_bits),
-                len(received_bits) % conv_coder.n,
+            save_figure_to_file(
+                downsampled_fig,
+                stem=f"rx_downsampled_constellation_{timestamp}",
+                output_dir="artifacts/downsampled"
             )
 
-            conv_decoded_bytes = conv_coder.decode(received_bits)
-            descrambled_bytes = scrambler.apply(conv_decoded_bytes)
+            downsampled_eye_fig = static_plotter.plot_eye_diagram(
+                downsampled_signal,
+                samples_per_symbol=gold_detector.sps,
+                title=f"RX Downsampled Signal Eye Diagram {timestamp}"
+            )
+            save_figure_to_file(
+                downsampled_eye_fig,
+                stem=f"rx_downsampled_eye_diagram_{timestamp}",
+                output_dir="artifacts/downsampled"
+            )
+   
+            corr_fig = static_plotter.plot_correlation(
+                correlation,
+                title=f"RX Gold Code Correlation {timestamp}"
+            )
+            save_figure_to_file(
+                corr_fig,
+                stem=f"rx_correlation_{timestamp}",
+                output_dir="artifacts/correlation"
+
+            )
+
+            #symbols_without_gold = gold_detector.remove_gold_symbols(downsampled_signal)
+
+            received_bits = modulation_protocol.demodulate_signal(downsampled_signal)
+
+            print(f"Received bits: {received_bits}")
+            print(f"length of received bytes: {len(received_bits)}")
+
+            descrambled_bytes = scrambler.apply(received_bits)
             fec_decoded_bits = fec_codec.decode(descrambled_bytes)
             received_datagram = Datagram.unpack(fec_decoded_bits)
+
 
             try:
                 rx_queue.put(received_datagram)
@@ -219,7 +218,6 @@ def _rx_loop():
                 logging.info(f"Received ACK for msg_ID: {received_datagram.get_msg_id}")
                 _ack_received(int(received_datagram.get_msg_id))
             
-
             # retransmit the previous sent message.
             elif received_datagram.get_msg_type == msgType.NACK:
                 logging.info(f"Received NACK. Retransmitting oldest pending message if any.")
@@ -230,10 +228,9 @@ def _rx_loop():
                 raise ValueError("Unknown message type received.")
                 
         except ValueError as e:
-            logging.warning(f"Did not receive valid signal: {e}")
+            logging.debug(f"Did not receive valid signal: {e}")
             nack_datagram = Datagram.as_nack()
             # queue_datagram(nack_datagram) # Bendik temp disable nack response to avoid feedback loop
-            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
         except RuntimeError as e:
             logging.error(f"Runtime error in RX loop: {e}")
@@ -256,10 +253,9 @@ def _tx_loop():
 
             fec_coded_data = fec_codec.encode(tx_datagram.pack())
             scrambled_data = scrambler.apply(fec_coded_data)
-            conv_coded_data = conv_coder.encode(scrambled_data)
-            modulated_signal = modulation_protocol.modulate_message(conv_coded_data)
+            modulated_signal = modulation_protocol.modulate_message(scrambled_data)
             signal_with_gold = gold_detector.add_gold_symbols(modulated_signal)
-            upsampled_signal = modulation_protocol.upsample_symbols(signal_with_gold)
+            upsampled_signal = gold_detector.upsample(signal_with_gold)
 
             if matched_filter.hardware_filter_enable:
                 filtered_signal = upsampled_signal  # Assume hardware filtering is applied by the SDR TODO: Not working as inteded
@@ -271,25 +267,25 @@ def _tx_loop():
             if debug_mode:
                 logging.debug(f"TX loop got datagram from queue: {tx_datagram}")
                 
-                # Constellation and PSD plots when debug is enabled
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                capture_plot_if_enabled(
-                    "tx_burst",
-                    "constellation",
-                    modulated_signal,
-                    title=f"TX Burst Constellation {timestamp}",
-                    stem=f"tx_burst_constellation_{timestamp}",
-                )
-                capture_plot_if_enabled(
-                    "tx_burst",
-                    "psd",
-                    filtered_signal,
-                    title=f"TX Burst PSD {timestamp}",
-                    stem=f"tx_burst_psd_{timestamp}",
-                    sample_rate=float(config["modulation"]["sample_rate"]),
-                    center_freq=float(config["plotter"]["center_freq"]),
-                )
-                
+                ## Constellation and PSD plots when debug is enabled
+                #timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                #capture_plot_if_enabled(
+                #    "tx_burst",
+                #    "constellation",
+                #    modulated_signal,
+                #    title=f"TX Burst Constellation {timestamp}",
+                #    stem=f"tx_burst_constellation_{timestamp}",
+                #)
+                #capture_plot_if_enabled(
+                #    "tx_burst",
+                #    "psd",
+                #    filtered_signal,
+                #    title=f"TX Burst PSD {timestamp}",
+                #    stem=f"tx_burst_psd_{timestamp}",
+                #    sample_rate=float(config["modulation"]["sample_rate"]),
+                #    center_freq=float(config["plotter"]["center_freq"]),
+                #)
+                #
 
 
             # add guard symbols before and after the signal.
@@ -427,7 +423,9 @@ def start():
     global rx_thread, tx_thread, tui_thread, ack_timeout_thread
     
     if sdr.connect():  
-        synchronizer.set_noise_floor(sdr.measure_noise_floor_dB())
+        noise_floor_dB = sdr.measure_noise_floor_dB()
+        synchronizer.set_noise_floor(noise_floor_dB)
+        gold_detector.update_threshold_with_noise_floor(noise_floor_dB)
     else:
         logging.debug("Failed to connect to SDR.")
         return False
@@ -537,15 +535,19 @@ def _cleanup():
     logging.info("Cleanup completed successfully.")
 
 
-
-
 ##################################################################################
 # ================== Helper functions for plotting and logging ==================
 ##################################################################################
 def request_static_plot(plot_data: dict):
     """Thread-safe method to request a static plot from any thread."""
-    if debug_mode and hasattr(static_plot_signaler, 'plot_requested'):
+    if not debug_mode:
+        return
+    
+    if 'static_plot_signaler' in globals() and static_plot_signaler is not None:
         static_plot_signaler.plot_requested.emit(plot_data)
+        return
+    
+    _handle_static_plot(plot_data)
 
 def capture_plot_if_enabled(
     event_name: str,
@@ -623,6 +625,17 @@ def _handle_static_plot(plot_data: dict):
     except Exception as e:
         logging.error(f"Error handling static plot: {e}")
 
+def save_figure_to_file(
+        fig,
+        stem: str,
+        output_dir: str = "artifacts",
+):
+    """Save a matplotlib figure to a file."""
+    os.makedirs(output_dir, exist_ok=True)
+    filename = os.path.join(output_dir, f"{stem}.png")
+    fig.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
 
     ##################################################################################
     # ================== Helper functions for runtime ==================
@@ -648,14 +661,8 @@ def calculate_expected_payload_symbols(
 
     datagram_bytes = int(config["datagram"]["total_size"])
     reed_solomon_bytes = int(config["coding"]["rs_added_bytes"])
-    tail_byte = 1 # Tail bits added by convolutional coder (assumes 1 byte of tail bits, adjust if different)
 
-    conv_n = int(config["coding"]["conv_n"])
-    conv_input_bits = (datagram_bytes + reed_solomon_bytes) * 8
-    conv_output_bits = (conv_input_bits + tail_byte * 8) * conv_n
-
-    logging.debug(f"Calculated expected payload symbols: {conv_output_bits // bps}")
-    return conv_output_bits // bps
+    return ((datagram_bytes + reed_solomon_bytes) * 8) // bps
 
     
 
@@ -706,10 +713,8 @@ if __name__ == "__main__":
 
     # ====================== Optional imports for debug mode ========================
     if config.get('radio', {}).get('debug_mode', False):
-        from sdr_plots import LiveSDRPlotter, LiveSDRPlotterMultiWindow, StaticSDRPlotter, StaticPlotSignaler
-        from matplotlib.pyplot import show
-        from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtCore import QTimer
+        from sdr_plots import StaticSDRPlotter
+        from matplotlib import pyplot as plt
     else:
         LiveSDRPlotter = None
         LiveSDRPlotterMultiWindow = None
@@ -725,7 +730,7 @@ if __name__ == "__main__":
     conv_coder = ConvolutionalCoder(config)
     matched_filter = RRCFilter(config)
     tui = ChatTUI(config)
-    gold_detector = GoldCodeDetector(config)
+    gold_detector = GoldCodeDetector(config, matched_filter.coefficients)
     synchronizer = Synchronizer(config)
     sdr = SDRTransciever(config) # must be initilized after Matched Filter module.
 
@@ -757,32 +762,32 @@ if __name__ == "__main__":
     plot_data_queue: Queue[np.ndarray] = Queue(maxsize=32)
     static_plotter = StaticSDRPlotter() if debug_mode else None
     static_plot_queue: Queue[Dict[str, np.ndarray]] = Queue(maxsize=8)  # Queue for static plot data (e.g., filter response, constellation points)
-    static_plotter_signaler = None
+    static_plot_signaler = None
 
     if debug_mode:
         logging.info("Debug mode enabled - initializing live plotter")
 
         try:
-            if QApplication.instance() is None:
-                qapp = QApplication(sys.argv)
-            else:
-                qapp = QApplication.instance()
-            
-            # Choose between single-window or multi-window mode
-            use_multi_window = config.get('plotter', {}).get('multi_window', True)
-            
-            if use_multi_window:
-                plotter = LiveSDRPlotterMultiWindow(config, plot_data_queue)
-            else:
-                plotter = LiveSDRPlotter(config, plot_data_queue)
-            
-            plotter.show()
-
+        #    #if QApplication.instance() is None:
+        #    #    qapp = QApplication(sys.argv)
+        #    #else:
+        #    #    qapp = QApplication.instance()
+        #    #
+        #    ## Choose between single-window or multi-window mode
+        #    #use_multi_window = config.get('plotter', {}).get('multi_window', True)
+        #    #
+        #    #if use_multi_window:
+        #    #    plotter = LiveSDRPlotterMultiWindow(config, plot_data_queue)
+        #    #else:
+        #    #    plotter = LiveSDRPlotter(config, plot_data_queue)
+        #    #
+        #    #plotter.show()
+#
             # Setup static plot signaler for thread-safe plot requests
             static_plot_signaler = StaticPlotSignaler()
             static_plot_signaler.plot_requested.connect(_handle_static_plot)
             
-            logging.info(f"Live plotter initialized ({'multi-window' if use_multi_window else 'single-window'} mode)")
+            #logging.info(f"Live plotter initialized ({'multi-window' if use_multi_window else 'single-window'} mode)")
         except Exception as e:
             logging.error(f"Failed to initialize live plotter: {e}")
             debug_mode = False

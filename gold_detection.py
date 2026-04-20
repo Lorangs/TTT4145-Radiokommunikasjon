@@ -10,18 +10,28 @@ logger = get_logger(__name__)
 import logging
 
 import numpy as np
+from numpy import typing as npt
+from scipy import signal
 
 from gold_code import get_gold_code_symbols
-from modulation import modulation_rotations, nearest_constellation_symbols
-from modulation import normalize_config_modulation_name
+from modulation import modulation_rotations, normalize_config_modulation_name
 
 
 class GoldCodeDetector:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, filter_taps: npt.NDArray[np.float64]):
+        self.sps = int(config["modulation"]["samples_per_symbol"])
         self.modulation_type = normalize_config_modulation_name(config)
+        self.modulation_order = int(config["modulation"]["order"])
         gold_config = config["gold_sequence"]
         code_length = int(gold_config["code_length"])
         code_index = int(gold_config.get("code_index", 0))
+        self.estimated_data_length = (
+            self.sps * (
+                int(config['datagram']['total_size']) +
+                int(config['gold_sequence']['code_length']) +
+                int(config['coding']['rs_added_bytes'])
+            ) // int(config['modulation']['order'])
+        )
 
         gold_symbols = get_gold_code_symbols(
             modulation_type=self.modulation_type,
@@ -45,32 +55,28 @@ class GoldCodeDetector:
         else:
             raise ValueError(f"Unsupported modulation type for Gold code: {self.modulation_type}")
 
+        self.upsampled_and_filtered_gold = signal.convolve(
+            self.upsample(self.gold_symbols[0]),
+            filter_taps,
+            mode='full'
+        )      
+
         self.code_length = code_length
         self.code_index = code_index
 
-        threshold = gold_config.get(
-            "correlation_scale_factor_threshold",
-            gold_config.get("correlation_threshold"),
-        )
-        if threshold is None:
-            raise ValueError(
-                "Missing Gold correlation threshold. Expected "
-                "'correlation_scale_factor_threshold' or 'correlation_threshold'."
-            )
-        self.correlation_scale_factor_threshold = float(threshold)
-        self.ref_energy = float(np.vdot(self.gold_symbols.get(0), self.gold_symbols.get(0)).real)
+        self.correlation_threshold = float(config["gold_sequence"].get("correlation_threshold"))
 
+    def update_threshold_with_noise_floor(self, noise_floor_dB: float):
+        """Update the correlation threshold based on the measured noise floor."""
+        noise_floor_linear = 10 ** (noise_floor_dB / 10)
+        self.correlation_threshold *= noise_floor_linear
+        logger.info(f"Updated correlation threshold based on noise floor: {self.correlation_threshold:.3f}")
 
-    def add_gold_symbols(self, signal: np.ndarray) -> np.ndarray:
-        """Add the selected Gold code to the beginning and end of the symbol stream."""
-        return np.concatenate((self.gold_symbols.get(0), signal, self.gold_symbols.get(0)))
+    def add_gold_symbols(self, signal: np.ndarray) -> npt.NDArray[np.complex64]:
+        """Add the selected Gold code to the beginning of the symbol stream."""
+        return np.concatenate((self.gold_symbols.get(0), signal))
 
-    def remove_gold_symbols(
-        self,
-        signal: np.ndarray,
-        start_index: int,
-        payload_symbol_count: int,
-    ) -> np.ndarray:
+    def remove_gold_symbols(self, signal: npt.NDArray[np.complex64]) -> npt.NDArray[np.complex64]:
         """
         Remove the leading Gold sequence and return exactly the payload symbols.
 
@@ -91,10 +97,10 @@ class GoldCodeDetector:
         received = np.asarray(signal).astype(np.complex64, copy=False)
 
         gold_len = int(self.gold_symbols[0].size)
-        payload_start = int(start_index + gold_len)
-        payload_stop = int(payload_start + payload_symbol_count)
+        payload_start = int(gold_len)
+        payload_stop = int(payload_start + self.estimated_data_length)
 
-        if start_index < 0 or (start_index + gold_len) > received.size:
+        if gold_len > received.size:
             raise ValueError("Invalid leading Gold index.")
 
         if payload_stop > received.size:
@@ -105,245 +111,60 @@ class GoldCodeDetector:
         return received[payload_start:payload_stop]
 
 
-    def normalized_correlation(self, received_signal: np.ndarray) -> np.ndarray:
-        """Compute the normalized correlation between the received signal and the Gold code."""
-        received = np.asarray(received_signal).astype(np.complex64, copy=False)
+    def timing_estimate(self, samples: npt.NDAarray[np.complex64]) -> tuple[int, int] | None:
+        """
+        Estimate the timing offset of the leading Gold code in the given sample stream.
 
-        if received.size < self.gold_symbols.get(0).size:
-            return np.array([], dtype=np.float32)
-
-        raw = np.correlate(received, self.gold_symbols.get(0), mode="valid")
-
-        rx_power = np.abs(received) ** 2
-        window_energy = np.convolve(
-            rx_power,
-            np.ones(self.gold_symbols.get(0).size, dtype=np.float32),
-            mode="valid",
-        )
-        denom = np.sqrt(np.maximum(self.ref_energy * window_energy, 1e-12))
-        return (np.abs(raw) / denom).astype(np.float32, copy=False)
-    
-    def _normalized_correlation_with_template(
-        self,
-        received_signal: np.ndarray,
-        template: np.ndarray,
-    ) -> np.ndarray:
-        received = np.asarray(received_signal).astype(np.complex64, copy=False)
-        template = np.asarray(template).astype(np.complex64, copy=False)
-
-        if received.size < template.size:
-            return np.array([], dtype=np.float32)
-
-        raw = np.correlate(received, template, mode="valid")
-        rx_power = np.abs(received) ** 2
-        window_energy = np.convolve(
-            rx_power,
-            np.ones(template.size, dtype=np.float32),
-            mode="valid",
-        )
-        ref_energy = float(np.vdot(template, template).real)
-        denom = np.sqrt(np.maximum(ref_energy * window_energy, 1e-12))
+        This method assumes that the samples are already aligned to symbol boundaries and that the leading Gold code is present. 
+        It returns the estimated timing offset (in samples) and which branch has the maximum energy.
         
-        return (np.abs(raw) / denom).astype(np.float32, copy=False)
-
-
-    def detect(self, received_signal: np.ndarray) -> int | None:
-        """Detect the presence of the leading and trailing Gold code in the received signal and return the index of the first one, or None if no match exceeds the threshold."""
-        scores = self.normalized_correlation(received_signal)
-        if scores.size == 0:
-            return None
-
-        peak_index = int(np.argmax(scores))
-        peak_value = float(scores[peak_index])
-        if peak_value < self.correlation_scale_factor_threshold:
-            return None
-        return peak_index
-
-    def rotate_signal(self, signal: np.ndarray, rotation: int) -> np.ndarray:
-        """Rotate the signal by the specified angle (in degrees) if it's a known rotation for the modulation type."""
-        return signal * self.rotation_matrix[rotation]
-
-    def detect_with_score(
-        self, 
-        received_signal: np.ndarray
-    ) -> tuple[tuple[int, float] | None, tuple[int, float] | None]:
-        """
-        Return two strongest peaks (leading, trailing), or (None, None).
-        Each peak is (index, score).
-        """
-        scores = self.normalized_correlation(received_signal)
-        p1, p2 = self._top_two_peaks_min_separation(
-            scores=scores,
-            min_separation=self.code_length,
-            threshold=self.correlation_scale_factor_threshold,
-        )
-        if p1 is None or p2 is None:
-            return None, None
-
-        # time order
-        if p1[0] <= p2[0]:
-            return p1, p2
-        return p2, p1
-
-    @staticmethod
-    def _top_two_peaks_min_separation(
-        scores: np.ndarray,
-        min_separation: int,
-        threshold: float,
-    ) -> tuple[tuple[int, float] | None, tuple[int, float] | None]:
-        """Return two strongest peaks >= threshold with |i-j| >= min_separation."""
-        if scores.size == 0:
-            return None, None
-
-        order = np.argsort(scores)[::-1]  # strongest first
-        first: tuple[int, float] | None = None
-        second: tuple[int, float] | None = None
-
-        for idx in order:
-            i = int(idx)
-            v = float(scores[i])
-            if v < threshold:
-                break
-
-            if first is None:
-                first = (i, v)
-                continue
-
-            if abs(i - first[0]) >= int(min_separation):
-                second = (i, v)
-                break
-
-        return first, second
-
-
-    def detect_with_rotation(
-        self,
-        received_symbols: np.ndarray,
-    ) -> tuple[int | None, int]:
-        """
-        Detect the strongest Gold-code match across all allowed rotations.
-
+        Args:
+            samples: Complex baseband samples at symbol rate (after matched filtering)
         Returns:
-            (best_index, best_rotation)
-
-        If no correlation peak is above threshold, returns (None, 0).
+            - Estimated timing offset in samples (integer)
+            - Index of the upsample branch with maximum energy (integer) range: 0 -> sps-1
         """
-        received = np.asarray(received_symbols).astype(np.complex64, copy=False)
+        correlation = signal.correlate(samples, self.upsampled_and_filtered_gold, mode='valid')
+        correlation_magnitude = np.abs(correlation)
+        peak_indices = signal.find_peaks(
+            x=correlation_magnitude,
+            threshold=self.correlation_threshold,
+            distance=self.estimated_data_length*2
+        )[0]
 
-        best_index: int | None = None
-        best_peak = -1.0
-        best_rotation = 0
+        if len(peak_indices) == 0:
+            raise ValueError("No Gold code peak found above the correlation threshold.")
+        else:
+            logger.debug(f"Found {len(peak_indices)} peaks above the correlation threshold: {peak_indices}")
+            peak_idx = 0
+            for idx in peak_indices:
+                if correlation_magnitude[idx] > correlation_magnitude[peak_idx]:
+                    peak_idx = idx
 
-        for rotation, template in self.gold_symbols.items():
-            scores = self._normalized_correlation_with_template(received, template)
-            if scores.size == 0:
-                continue
+        # calculate which upsample branch has the maximum energy
+        max_energy = 0
+        max_energy_branch = 0
+        for i in range(self.sps):
+            branch_energy = np.sum(np.abs(samples[i:self.estimated_data_length:self.sps])**self.modulation_order)
+            if branch_energy > max_energy:
+                max_energy = branch_energy
+                max_energy_branch = i
 
-            index = int(np.argmax(scores))
-            peak = float(scores[index])
-
-            if peak < self.correlation_scale_factor_threshold:
-                continue
-
-            if peak > best_peak:
-                best_peak = peak
-                best_index = index
-                best_rotation = rotation
-
-        return best_index, best_rotation
-
-
-    def rank_gold_candidates(
-        self,
-        symbol_stream: np.ndarray,
-        expected_index: int | None = None,
-        search_radius: int | None = None,
-        top_candidates: int = 5,
-    ) -> list[dict]:
-        received = np.asarray(symbol_stream).astype(np.complex64, copy=False)
-        candidates: list[dict] = []
-
-        for rotation, sequence in self.gold_symbols.items():
-
-            decisions = nearest_constellation_symbols(sequence, self.modulation_type)
-            scores = self.normalized_correlation(decisions)
-            if scores.size == 0:
-                continue
-
-            if expected_index is not None and search_radius is not None:
-                start = max(0, int(expected_index) - int(search_radius))
-                stop = min(int(scores.size), int(expected_index) + int(search_radius) + 1)
-            else:
-                start = 0
-                stop = int(scores.size)
-
-            if stop <= start:
-                continue
-
-            local_scores = scores[start:stop]
-            unique_indices: set[int] = set()
-
-            if expected_index is not None and start <= int(expected_index) < stop:
-                unique_indices.add(int(expected_index) - start)
-
-            top_count = min(int(max(1, top_candidates)), int(local_scores.size))
-            sorted_local = np.argsort(local_scores)[-top_count:][::-1]
-            for local_idx in sorted_local.tolist():
-                unique_indices.add(int(local_idx))
-
-            for local_idx in sorted(unique_indices):
-                index = start + int(local_idx)
-                peak = float(local_scores[local_idx])
-                candidates.append(
-                    {
-                        "phase": 0,
-                        "index": int(index),
-                        "peak": peak,
-                        "rotation": rotation,
-                        "decisions": decisions,
-                    }
-                )
-
-        if not candidates:
-            return [
-                {
-                    "phase": 0,
-                    "index": None,
-                    "peak": 0.0,
-                    "rotation": 1 + 0j,
-                    "decisions": np.array([], dtype=np.complex64),
-                }
-            ]
-
-        def sort_key(candidate: dict) -> tuple[float, float, float]:
-            if expected_index is None:
-                return (-float(candidate["peak"]), 0.0, 0.0)
-            distance = abs(int(candidate["index"]) - int(expected_index))
-            exact_bias = 0 if distance == 0 else 1
-            return (float(exact_bias), float(distance), -float(candidate["peak"]))
-
-        candidates.sort(key=sort_key)
-        return candidates[: max(1, int(top_candidates))]
+        return peak_idx, max_energy_branch, correlation
         
-    def candidate_fits_frame(
-        self,
-        signal_length: int,
-        start_index: int,
-        payload_symbol_count: int,
-        require_trailing_gold: bool = False,
-    ) -> bool:
-        """
-        Check whether a detected Gold position can fit a full frame.
+    def upsample(self, symbols: npt.NDArray[np.complex64]) -> npt.NDArray[np.complex64]:
+        upsampled = np.zeros(symbols.size * self.sps, dtype=np.complex64)
+        upsampled[::self.sps] = symbols.astype(np.complex64, copy=False)
+        return upsampled
 
-        Frame layout:
-            [leading Gold][payload][trailing Gold]
-        """
-        gold_len = int(self.gold_symbols[0].size)
+    def downsample_and_crop(self, signal: npt.NDArray[np.complex64], start_inx: int, branch_index: int) -> npt.NDArray[np.complex64]:
+        start_idx = int(start_inx + branch_index + self.code_length * self.sps)
+        end_idx = int(start_idx + 1280) # 32 bytes + 8 RS bytes = 40 bytes * 8 bits/byte = 320 symbols * sps (4) = 1280 samples
+        signal_slice = signal[start_idx:end_idx:self.sps]
+        return signal_slice.astype(np.complex64, copy=False)
 
-        required_symbols = gold_len + payload_symbol_count
-        if require_trailing_gold:
-            required_symbols += gold_len
-        return 0 <= start_index <= (signal_length - required_symbols)
+            
+        
 
     
 

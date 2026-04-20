@@ -20,18 +20,16 @@ class FCCodec:
     def __init__(self, config: dict):
         self.num_ecc = int(config['coding']['rs_num_ecc'])
         self.rsc = RSCodec(self.num_ecc)  # Initialize Reed-Solomon codec with enough ECC symbols to correct rs_num_ecc errors
-        self.last_decode_error = ""
 
     def encode(self, data: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         """Encode data using Reed-Solomon code."""
-        return np.array(self.rsc.encode(data.tobytes()), dtype=np.uint8)
+        return np.array(self.rsc.encode(data), dtype=np.uint8)
 
     def decode(self, encoded_data: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         """Decode data using Reed-Solomon code, correcting errors if possible."""
         try:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                decoded_msg, decoded_msg_ecc, errata_pos = self.rsc.decode(encoded_data.tobytes())
-            self.last_decode_error = ""
+            decoded_msg, decoded_msg_ecc, errata_pos = self.rsc.decode(encoded_data)
+            
             return np.array(decoded_msg, dtype=np.uint8)
         except ReedSolomonError as e:
             logger.warning("Reed-Solomon decoding failed: %s", e)
@@ -49,10 +47,17 @@ MAP_ECC_TO_ADDITIONAL_BYTES = {
 
 if __name__ == "__main__":
     from datagram import Datagram, msgType
+    from scrambler import LFSRScrambler
+    scrambler = LFSRScrambler(config={
+        'coding': {
+            'scrambler_seed': 0b1010101,  # Example non-zero seed
+            'scrambler_register_length': 8
+        }
+    })
 
     fc_codec = FCCodec(config={
         'coding': {
-            'rs_num_ecc': 32
+            'rs_num_ecc': 8
         }
     })
 
@@ -61,7 +66,7 @@ if __name__ == "__main__":
     print("Original data:")
     print(datagram)
 
-    bytes_arr = np.frombuffer(datagram.pack(), dtype=np.uint8)
+    bytes_arr = datagram.pack()
     print("Packed data:")
     print(bytes_arr)
 
@@ -71,22 +76,20 @@ if __name__ == "__main__":
     print(f"added bytes:\t{len(encoded_data) - len(bytes_arr)}")
     print()
 
-    # Introduce some errors for testing
-    for i in range(fc_codec.num_ecc + 1):
-        print(f"Number of errors: {i+1}")
-        encoded_data[i] ^= 0xFF  # Flip bits to simulate errors
-        #print("Corrupted encoded data:")
-        #print(encoded_data)
+    scrambled_data = scrambler.apply(encoded_data)
 
+    rolled_data = np.roll(scrambled_data, 1)
+    descrambled_data = scrambler.apply(rolled_data7ujm0okm)
+    print("Descrambled data:")
+    print(descrambled_data)
 
-        decoded_data = fc_codec.rs_decode(encoded_data)
-        if decoded_data is not None:
-            print("Decoded data:")
-            #print(np.frombuffer(decoded_data, dtype=np.uint8))
-            print()
-        else :
-            print(f"Failed to decode data with {i+1} errors.\n")
-
-    
-
-    
+    try:
+        decoded_data = fc_codec.decode(descrambled_data)
+        print("Decoded data:")
+        print(decoded_data)
+    except ReedSolomonError as e:
+        print(f"Decoding failed with ReedSolomonError: {e}")
+    except ValueError as e:
+        print(f"Decoding failed with ValueError: {e}")
+    except RuntimeError as e:
+        print(f"Decoding failed with RuntimeError: {e}")

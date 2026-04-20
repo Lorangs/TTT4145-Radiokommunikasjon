@@ -572,6 +572,7 @@ class Synchronizer:
         )[0]
 
 
+
 if __name__ == "__main__":
     from yaml import safe_load
     from sdr_plots import StaticSDRPlotter

@@ -509,19 +509,50 @@ class StaticSDRPlotter:
         
 
         num_symbols = min(max_possible_traces, num_traces)
-        
         time = np.linspace(-symbols_per_trace/2, symbols_per_trace/2, trace_length, endpoint=True)  # Symbol periods on x-axis
-        
+   
         for i in range(num_traces):
             start = i * samples_per_symbol
             end = start + trace_length
-            ax.plot(time, samples[start:end], color='orange', alpha=0.5, linewidth=0.5)
+            trace = samples[start:end]
+            if len(trace) < trace_length:
+                break
+
+            ax.plot(time, trace, color='orange', alpha=0.5, linewidth=0.5)
         
         ax.set_xlabel('Symbol Period', fontsize=10)
         ax.set_ylabel('Amplitude', fontsize=10)
         ax.set_title(title, fontsize=12)
         ax.grid(True, alpha=0.3)
-    
+
+    def plot_correlation(self,
+                         correlation: np.ndarray,
+                         title: str = "Correlation") -> Optional[Figure]:
+        """
+        Plot the correlation values.
+
+        Args:
+            correlation: Correlation values
+            title: Plot title
+
+        Returns:
+            matplotlib Figure object
+        """
+        try:
+            fig, ax = plt.subplots(figsize=(10, 5))
+
+            ax.plot(correlation, linewidth=0.8)
+            ax.set_xlabel("Sample Index", fontsize=10)
+            ax.set_ylabel("Correlation", fontsize=10)
+            ax.set_title(title, fontsize=12)
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            return fig
+        except Exception as e:
+            print(f"Unexpected error in plot_correlation: {e}")
+            return None
+
     def plot_magnitude_phase(self,
                            samples: np.ndarray,
                            sample_rate: float,
