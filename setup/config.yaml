@@ -102,7 +102,6 @@ synchronization:
   gardner_gate_energy_scale_high: 3.0  # Scale factor applied to the higher Gardner gate percentile.
   gardner_tracking_payload_symbols: 64  # Number of payload symbols used for Gardner tracking.
   short_equalizer_enable: true  # Enable short equalizer
-  short_equalizer_regularization: 0.001  # Regularization parameter for short equalizer
 
 # Plotter settings
 plotter:

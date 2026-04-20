@@ -1,10 +1,4 @@
-"""
-To display logging file in a terminal with color coding, use the following command:
-tail -f log/$(date +%Y-%m-%d)-debug.logINGWARNING\\|INFO\\|DEBUG"
-
-to filter for specific log levels while keeping color coding.
-
-"""
+"""Main runtime for the Pluto SDR chat application."""
 
 # import system modules
 import os
@@ -15,7 +9,6 @@ import select
 import threading
 from queue import Queue, Empty, Full
 from datetime import datetime
-from typing import Dict
 import signal
 import atexit
 
@@ -171,8 +164,8 @@ def _rx_loop():
                 "rx_gold_detect",
                 "psd",
                 coarse_freq_adjusted,
-                title=f"Coarse Frequency Adjusted PSD {timestamp}",
-                stem=f"Coarse_freq_adj_PSD_{timestamp}",
+                title=f"RX PSD After Coarse Frequency Correction {timestamp}",
+                stem=f"rx_psd_after_coarse_frequency_correction_{timestamp}",
                 sample_rate=float(config["modulation"]["sample_rate"]),
                 center_freq=float(config["plotter"]["center_freq"]),
             )
@@ -180,26 +173,24 @@ def _rx_loop():
                 "rx_gold_detect",
                 "eye",
                 aligned_eye_window,
-                title=f"Aligned Eye Diagram - matched filter {timestamp}",
-                stem=f"rx_eye_aligned_{timestamp}",
+                title=f"RX Eye Diagram After Matched Filter {timestamp}",
+                stem=f"rx_eye_after_matched_filter_{timestamp}",
                 samples_per_symbol=SAMPLES_PER_SYMBOL,
             )
             capture_plot_if_enabled(
                 "rx_gold_detect",
                 "constellation",
                 time_adjusted,
-                title=f"RX Gold Detect Constellation {timestamp}",
-                stem=f"rx_gold_detect_constellation_{timestamp}",
+                title=f"RX Constellation After Gardner Timing Recovery {timestamp}",
+                stem=f"rx_constellation_after_gardner_timing_{timestamp}",
 
             )
                 
-            ### The following section attempts to decode the payload using the best rotation estimate from the gold code.
-            ### Falls back to trying other rotations if decoding fails. 
-            ### This is to handle cases where the gold-based rotation estimate is not perfect, which can happen at low SNR.
+            # Try the Gold-based rotation first, then fall back to the other
+            # allowed constellation rotations if decode fails.
             selected_rotated_signal = None
             selected_frame_synched_signal = None
             received_datagram = None
-            successful_rotation = None
 
             def apply_equalizer(rotated_signal: np.ndarray) -> np.ndarray:
                 if not EQUALIZER_ENABLED:
@@ -225,12 +216,11 @@ def _rx_loop():
                     received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
 
                     logging.debug(
-                        "Frame sync: gold_index=%s tried_rotation=%s frame_symbols=%d received_bits=%d bits_mod_n=%d",
+                        "Frame sync: gold_index=%s tried_rotation=%s frame_symbols=%d received_bytes=%d",
                         gold_index,
                         rotation,
                         len(frame_synched_signal),
                         len(received_bits),
-                        len(received_bits) % conv_coder.n,
                     )
 
                     conv_decoded_bytes = conv_coder.decode(received_bits)
@@ -241,7 +231,6 @@ def _rx_loop():
 
                     selected_rotated_signal = equalized_signal
                     selected_frame_synched_signal = frame_synched_signal
-                    successful_rotation = rotation
                     break
                 except (ValueError, RuntimeError) as e:
                     logging.debug(
@@ -259,29 +248,29 @@ def _rx_loop():
                 "rx_gold_detect",
                 "constellation",
                 selected_rotated_signal,
-                title=f"Constellation post selected rotation {timestamp}",
-                stem=f"Const_Post_Selected_Rotation_{timestamp}",
+                title=f"RX Stream Constellation After Selected Rotation {timestamp}",
+                stem=f"rx_stream_constellation_after_selected_rotation_{timestamp}",
             )
             capture_plot_if_enabled(
                 "rx_gold_detect",
                 "constellation",
                 selected_frame_synched_signal,
-                title=f"Payload constellation post selected rotation {timestamp}",
-                stem=f"Payload_Const_Post_Selected_Rotation_{timestamp}",
+                title=f"RX Payload Constellation After Selected Rotation {timestamp}",
+                stem=f"rx_payload_constellation_after_selected_rotation_{timestamp}",
             )
             capture_plot_if_enabled(
                 "rx_gold_detect",
                 "symbol_eye",
                 selected_frame_synched_signal.real,
-                title=f"Payload Symbol Eye I {timestamp}",
-                stem=f"Payload_Symbol_Eye_I_{timestamp}",
+                title=f"RX Payload Symbol Eye I After Selected Rotation {timestamp}",
+                stem=f"rx_payload_symbol_eye_i_after_selected_rotation_{timestamp}",
             )
             capture_plot_if_enabled(
                 "rx_gold_detect",
                 "symbol_eye",
                 selected_frame_synched_signal.imag,
-                title=f"Payload Symbol Eye Q {timestamp}",
-                stem=f"Payload_Symbol_Eye_Q_{timestamp}",
+                title=f"RX Payload Symbol Eye Q After Selected Rotation {timestamp}",
+                stem=f"rx_payload_symbol_eye_q_after_selected_rotation_{timestamp}",
             )
 
             try:
@@ -365,15 +354,15 @@ def _tx_loop():
                     "tx_burst",
                     "constellation",
                     modulated_signal,
-                    title=f"TX Burst Constellation {timestamp}",
-                    stem=f"tx_burst_constellation_{timestamp}",
+                    title=f"TX Payload Constellation Before Gold Framing {timestamp}",
+                    stem=f"tx_payload_constellation_before_gold_framing_{timestamp}",
                 )
                 capture_plot_if_enabled(
                     "tx_burst",
                     "psd",
                     filtered_signal,
-                    title=f"TX Burst PSD {timestamp}",
-                    stem=f"tx_burst_psd_{timestamp}",
+                    title=f"TX Framed Burst PSD Before Guard Insertion {timestamp}",
+                    stem=f"tx_framed_burst_psd_before_guard_insertion_{timestamp}",
                     sample_rate=float(config["modulation"]["sample_rate"]),
                     center_freq=float(config["plotter"]["center_freq"]),
                 )
@@ -616,7 +605,7 @@ def _cleanup():
     # Remove temporary filter file
     try:
         if hasattr(matched_filter, "hardware_filter_enable") and matched_filter.hardware_filter_enable:
-            filter_file = config["radio"]["hardware_filter_file"]
+            filter_file = config["filter"]["hardware_filter_file"]
             if os.path.exists(filter_file):
                 os.remove(filter_file)
                 logging.info(f"Deleted temporary filter file: {filter_file}")
@@ -875,9 +864,6 @@ if __name__ == "__main__":
     RETRANSMIT_ENABLED = bool(link_control_config.get("enable_retransmit", True))
     PENDING_TRACKING_ENABLED = bool(link_control_config.get("track_pending_data", True))
     EQUALIZER_ENABLED = bool(config["synchronization"].get("short_equalizer_enable", True))
-    EQUALIZER_REGULARIZATION = float(
-    config["synchronization"].get("short_equalizer_regularization", 1.0e-3)
-)
     # ================== Logging setup ==================
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)
@@ -915,7 +901,6 @@ if __name__ == "__main__":
         LiveSDRPlotter = None
         LiveSDRPlotterMultiWindow = None
         StaticSDRPlotter = None
-        #StaticPlotSignaler = None
         QApplication = None
 
 
@@ -929,7 +914,7 @@ if __name__ == "__main__":
     tui = ChatTUI(config)
     gold_detector = GoldCodeDetector(config)
     synchronizer = Synchronizer(config)
-    sdr = SDRTransciever(config) # must be initilized after Matched Filter module.
+    sdr = SDRTransciever(config)  # Must be initialized after matched_filter.
 
     # ================= Initialize additional constants =================
     EXPECTED_PAYLOAD_SYMBOLS = calculate_expected_payload_symbols(config)
@@ -961,8 +946,7 @@ if __name__ == "__main__":
     plotter = None
     plot_data_queue: Queue[np.ndarray] = Queue(maxsize=32)
     static_plotter = StaticSDRPlotter() if debug_mode else None
-    static_plot_queue: Queue[Dict[str, np.ndarray]] = Queue(maxsize=8)  # Queue for static plot data (e.g., filter response, constellation points)
-    static_plotter_signaler = None
+    static_plot_signaler = None
 
     if debug_mode:
         logging.info("Debug mode enabled - initializing live plotter")

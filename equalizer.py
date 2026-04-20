@@ -1,8 +1,4 @@
-"""
-Minimal 3-tap complex FIR equalizer trained on known header symbols.
-
-The equalizer is trained using least squares regression with optional Tikhonov regularization.
-"""
+"""Minimal 3-tap complex FIR equalizer trained on known header symbols."""
 
 from __future__ import annotations
 
