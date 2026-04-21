@@ -34,7 +34,7 @@ from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
 
-NUMBER_OF_DATAGRAMS = 1000
+NUMBER_OF_DATAGRAMS = 10000
 TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
 STAGES = (

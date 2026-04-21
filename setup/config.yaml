@@ -11,7 +11,7 @@ radio:
 # Link control settings
 link_control:
   enable_ack: True  # Enable ACK mechanism
-  enable_nack: True  # Enable NACK mechanism
+  enable_nack: false  # Enable NACK mechanism
   enable_retransmit: True  # Enable packet retransmission
   track_pending_data: True  # Track pending data
 
@@ -33,10 +33,10 @@ datagram:
 
 # Transmitter settings
 transmitter:
-  tx_cyclic_buffer: false  # Enable/disable cyclic buffer
+  tx_cyclic_buffer: False  # Enable/disable cyclic buffer
   tx_gain_dB: 0  # TX gain in dB, range: -90 to 0 dB
   tx_bandwidth: 1e6  # TX bandwidth in Hz
-  tx_carrier: 866.5e6  # TX local oscillator (carrier frequency) in Hz
+  tx_carrier: 865.5e6  # TX local oscillator (carrier frequency) in Hz
   tx_buffer_size: 1024  # TX buffer size in samples (2**10)
   tx_guard_symbols: 32  # Number of guard symbols (idle time) to insert between packets. Adjust based on expected channel conditions and timing requirements. More guard symbols can help with timing acquisition and reduce inter-packet interference, but also increase overhead.
   tx_peak_scale: 0.39  # Normalization factor for TX Burst, keeps burst even (less variation at operating point)
@@ -45,7 +45,7 @@ transmitter:
 receiver:
   rx_gain_dB: 20  # RX gain in dB, range: 0 to 73 dB
   rx_bandwidth: 1e6  # RX bandwidth in Hz
-  rx_carrier: 866.5e6  # RX local oscillator (carrier frequency) in Hz
+  rx_carrier: 867.5e6  # RX local oscillator (carrier frequency) in Hz
   gain_mode: fast_attack  # Gain mode: "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
   buffer_size: 32768  # RX buffer size
 
