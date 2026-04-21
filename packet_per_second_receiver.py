@@ -33,11 +33,14 @@ from interleaver import Interleaver
 from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
-NUMBER_OF_DATAGRAMS = 1000
+NUMBER_OF_DATAGRAMS = 100      # Number of datagrams to measure start time and end time for calculating packet error rate. Adjust as needed for testing.
 TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
 SPINNER = ['|', '/', '-', '\\']
 
+num_received_datagrams = 0      # counter for datagrams received during datarate test.
+test_start_time = None         # Timestamp when the first datagram is received during the test.
+test_end_time = None           # Timestamp when the last datagram is received during the test.
 
 def generate_test_datagrams(num_datagrams: int) -> list[Datagram]:
     datagrams = []
@@ -104,7 +107,9 @@ def queue_datagram(datagram: Datagram) -> bool:
 ##############################################################################################
 def _rx_loop():
     """Receive loop - continuously receive data from SDR and process it."""
+    global num_received_datagrams, test_start_time, test_end_time
     logging.debug("RX loop started.")
+
 
     while not stop_event.is_set():
         try:
@@ -187,7 +192,13 @@ def _rx_loop():
             if received_datagram is None:
                 continue
 
-
+            num_received_datagrams += 1
+            if num_received_datagrams == 0:
+                logging.info(f"Received first datagram ID {received_datagram.get_msg_id}. Starting timer for datagram error rate test.")
+                test_start_time = time.time()
+            elif num_received_datagrams == NUMBER_OF_DATAGRAMS:
+                test_end_time = time.time()
+                stop_event.set()  # Stop after receiving the specified number of datagrams for testing
             try:
                 rx_queue.put(received_datagram)
             except Full:
@@ -211,15 +222,17 @@ def _rx_loop():
 
 def _tui_loop():
     """TUI loop - continuously refresh the terminal user interface."""
+    global num_received_datagrams
     logging.debug("TUI loop started.")
     i = 0
     num_spinner_states = len(SPINNER)
     while not stop_event.is_set():
         try:
             print("\033c", end="")  # Clear terminal
+            print(f"Measuring packet error rate... Received {num_received_datagrams} datagrams so far.")
             print(f"({SPINNER[i % num_spinner_states]})")
             i += 1
-            time.sleep(0.5)  # Adjust refresh rate as needed
+            time.sleep(1)  # Adjust refresh rate as needed
             
         except Exception as e:
             logging.error(f"Error in TUI loop: {e}")
@@ -277,30 +290,11 @@ def stop():
     tui_thread = None
 
 
-def finalize_result_once():
-    """Calculate and log final results. Idempotent."""
-    global finalized
-
-    with finalize_lock:
-        if finalized:
-            return
-        finalized = True
-
-    received_datagrams = []
-    while not rx_queue.empty():
-        try:
-            received_datagram = rx_queue.get_nowait()
-            received_datagrams.append(received_datagram)
-        except Empty:
-            break
-
-    per = num_datagram_errors(test_arr, received_datagrams)
-    print(f"\nSent {len(test_arr)} datagrams, received {len(received_datagrams)} datagrams, with {per} datagram errors.")
 
 def _signal_handler(signum, frame):
     """Handle termination signals for graceful shutdown."""
-    finalize_result_once()
     # Terminate application after calculating results
+    logging.info(f"Received signal {signum}. Initiating shutdown...")
     stop_event.set()
 
 def _cleanup():
@@ -334,11 +328,6 @@ def _cleanup():
             logging.info("SDR disconnected successfully.")
     except Exception as e:
         logging.error(f"Error disconnecting SDR: {e}")
-
-
-
-
-
 
     ##################################################################################
     # ================== Helper functions for runtime ==================
@@ -513,23 +502,23 @@ if __name__ == "__main__":
     # ================== Message queues for inter-thread communication ==================
     rx_queue: Queue[Datagram] = Queue(maxsize=NUMBER_OF_DATAGRAMS)       # Queue for incoming messages received by the RX thread to be processed by the TUI thread
     
-
     # ======================= start application =========================
     if start():
         logging.info("SDR Chat Application is running. Press Ctrl+C to stop.")
-
         try:
-            test_arr = generate_test_datagrams(NUMBER_OF_DATAGRAMS)
-
             while not stop_event.is_set():
                 time.sleep(1)  # Main thread can perform periodic tasks here if needed
-                
+            elapsed_time = test_end_time - test_start_time if (test_start_time and test_end_time) else None
+            datarate = (num_received_datagrams / elapsed_time) if elapsed_time else None
+
+            print(f"Received {num_received_datagrams} datagrams during test.")
+            print(f"Elapsed time: {elapsed_time}")
+            print(f"Datarate: {datarate}")
+
         except KeyboardInterrupt:
-            finalize_result_once()
             stop_event.set()
 
         finally:
-            finalize_result_once()
             _cleanup()
 
     else:

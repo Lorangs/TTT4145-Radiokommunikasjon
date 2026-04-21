@@ -34,7 +34,7 @@ class FCCodec:
             self.last_decode_error = ""
             return np.array(decoded_msg, dtype=np.uint8)
         except ReedSolomonError as e:
-            logger.warning("Reed-Solomon decoding failed: %s", e)
+            #logger.warning("Reed-Solomon decoding failed: %s", e)
             raise ValueError(f"Reed-Solomon decoding failed: {e}")
         except Exception as e:
             logger.error("Unexpected error during decoding: %s", e)
