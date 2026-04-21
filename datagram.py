@@ -104,10 +104,15 @@ class Datagram():
 
 
     @classmethod
-    def as_ack(cls, msg_id: np.uint8) -> 'Datagram':
+    def as_ack(
+        cls, 
+        msg_id: np.uint8,
+        timestamp_ms: np.uint32 | None = None, 
+        payload: npt.NDArray[np.uint8] = np.array([], dtype=np.uint8)
+    ) -> 'Datagram':
         """Create an ACK datagram for a given message ID."""
-        return cls(msg_id=msg_id, msg_type=msgType.ACK)
-    
+        return cls(msg_id=msg_id, msg_type=msgType.ACK, timestamp_ms=timestamp_ms, payload=payload)
+
     @classmethod
     def as_nack(cls) -> 'Datagram':
         """Create a NACK datagram. MSG_ID is randomly generated as we did not receive a valid datagram."""
@@ -238,7 +243,7 @@ class Datagram():
         )
 
     @property
-    def get_payload(self) ->  np.ndarray:
+    def get_payload(self) ->  npt.NDArray[np.uint8]:
         """Get payload data."""
         return self._payload
     
@@ -248,7 +253,7 @@ class Datagram():
         return self._payload.tobytes().decode(encoding, errors=errors)
 
     @property
-    def get_payload_without_padding(self) -> np.ndarray:
+    def get_payload_without_padding(self) -> npt.NDArray[np.uint8]:
         """Backward-compatible alias for the logical payload bytes."""
         return self._payload
 

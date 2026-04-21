@@ -118,22 +118,158 @@ def num_datagram_errors(original: list[Datagram], received: list[Datagram]) -> i
 ##################################################################################
 # ============================== Message Handling ================================
 ##################################################################################
-def queue_datagram(datagram: Datagram) -> bool:
+def queue_datagram(datagram: Datagram) -> None:
     """Enqueue a datagram for transmission."""
     global tx_queue
     try: 
         tx_queue.put_nowait(datagram)
         logging.info(f"Queued datagram ID {datagram.get_msg_id} for transmission.")
-        return True
     except Full:
         logging.error(f"Failed to queue datagram ID {datagram.get_msg_id}. TX queue is full.")
-        return False
+        raise Full("TX queue is full")
 
+def _find_pending_index(msg_id: int) -> int | None:
+    for i, (pending_msg_id, _, _, _) in enumerate(pending_ack):
+        if pending_msg_id == msg_id:
+            return i
+    return None
+
+def _find_pending_payload(payload: npt.NDArray[np.uint8]) -> int | None:
+    for i, (_, _, datagram, _) in enumerate(pending_ack):
+        if datagram.get_payload.all() == payload.all():
+            return i
+    return None
+
+def _track_sent_data(datagram: Datagram) -> None:
+    """Track sent DATA datagrams for potential retransmission if ACK is not received."""
+    msg_id = int(datagram.get_msg_id)
+    now_ms = time.time() * 1000.0
+    with pending_lock:
+        idx = _find_pending_index(msg_id)
+        if idx is None:
+            pending_ack.append((msg_id, 0, datagram, now_ms))
+        else:
+            _, retries, _, _ = pending_ack[idx]
+            pending_ack[idx] = (msg_id, retries, datagram, now_ms)
+
+def _ack_received(payload: npt.NDArray[np.uint8]) -> None:
+    """Handle received ACK by removing the corresponding datagram from pending_ack."""
+    with pending_lock:
+        idx = _find_pending_payload(payload)
+        if idx is not None:
+            pending_ack.pop(idx)
+            #logging.info(f"Received ACK for datagram ID {payload[0]}. Removed from pending ACKs.")
+        else:
+            logging.warning(f"Received ACK with payload {payload} but no matching pending datagram found.")
+
+        
 
 ##############################################################################################
 # ================= Callback loops for threads =================
 ##############################################################################################
+def _rx_loop():
+    """Receive loop - continuously receive data from SDR and process it."""
+    logging.debug("RX loop started.")
 
+    while not stop_event.is_set():
+        try:
+            received_signal = sdr.sdr.rx()
+
+            coarse_freq_adjusted = synchronizer.coarse_frequenzy_synchronization(received_signal)
+            if coarse_freq_adjusted is None:
+                continue    # skip if signal is too weak to process
+
+            padded_signal = matched_filter.pad_signal_front_and_back(coarse_freq_adjusted)  
+            filtered_signal = matched_filter.apply_filter(padded_signal)
+            time_adjusted = synchronizer.gardner_timing_synchronization(filtered_signal)
+            fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
+            gold_index, _ = gold_detector.detect_with_rotation(
+                fine_freq_adjusted,
+                EXPECTED_PAYLOAD_SYMBOLS,
+            )
+
+            if gold_index is None:
+                # logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
+                continue   # skip if gold code is not detected, likely not a valid signal to process
+            if not gold_detector.candidate_fits_frame(
+                len(fine_freq_adjusted), 
+                gold_index,
+                EXPECTED_PAYLOAD_SYMBOLS
+            ):
+                continue
+            best_rotation = gold_detector.estimate_rotation_from_gold(
+                fine_freq_adjusted,
+                gold_index,
+            )
+
+    
+                
+            ### The following section attempts to decode the payload using the best rotation estimate from the gold code.
+            ### Falls back to trying other rotations if decoding fails. 
+            ### This is to handle cases where the gold-based rotation estimate is not perfect, which can happen at low SNR.
+
+            received_datagram = None
+
+            def apply_equalizer(rotated_signal: np.ndarray) -> np.ndarray:
+                if not EQUALIZER_ENABLED:
+                    return rotated_signal
+                return equalize_from_known_header(
+                    rotated_signal,
+                    gold_index,
+                    gold_detector.gold_symbols[0],
+                )
+
+            for rotation in _decode_rotation_fallback_order(
+                best_rotation,
+                modulation_protocol.modulation_type,
+            ):
+                try:
+                    rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, rotation)
+                    equalized_signal = apply_equalizer(rotated_signal)
+                    frame_synched_signal = gold_detector.remove_gold_symbols(
+                        equalized_signal,
+                        gold_index,
+                        EXPECTED_PAYLOAD_SYMBOLS,
+                    )
+                    received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
+
+                    conv_decoded_bytes = conv_coder.decode(received_bits)
+                    descrambled_bytes = scrambler.apply(conv_decoded_bytes)
+                    interleaved_bytes = interleaver.deinterleave(descrambled_bytes)
+                    fec_decoded_bits = fec_codec.decode(interleaved_bytes)
+                    received_datagram = Datagram.unpack(fec_decoded_bits)
+
+                    break
+                except (ValueError, RuntimeError) as e:
+                    logging.debug(
+                        "Rotation decode attempt failed: gold_index=%s rotation=%s error=%s",
+                        gold_index,
+                        rotation,
+                        e,
+                    )
+                    continue
+
+            if received_datagram is None:
+                continue
+
+            if received_datagram.get_msg_type == msgType.ACK:
+                if PENDING_TRACKING_ENABLED:
+                    _ack_received(received_datagram.get_payload())
+
+        except ValueError as e:
+            logging.warning(f"Did not receive valid signal: {e}")
+            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+            continue
+        except RuntimeError as e:
+            logging.error(f"Runtime error in RX loop: {e}")
+            stop_event.set()  # Trigger shutdown on critical errors
+            break
+        except Exception as e:
+            logging.error(f"Unexpected error in RX loop: {e}")
+            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+            continue
+
+    logging.debug("RX loop stopped.")
 
 def _tx_loop():
     """Transmit loop - continuously check for outgoing messages and transmit them."""
@@ -164,6 +300,14 @@ def _tx_loop():
 
             sdr.send_signal(signal_for_transmission)
             _inc_tx_sent()
+
+            if (
+                tx_datagram.get_msg_type == msgType.DATA
+                and PENDING_TRACKING_ENABLED
+            ):
+                _track_sent_data(tx_datagram) 
+            
+
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
 
             time.sleep(0.05)
@@ -233,10 +377,52 @@ def _tui_loop():
         sys.stdout.flush()
 
 
+
+def _ack_timeout_loop():
+    """ACK timeout loop - periodically check for pending ACKs and retransmit if necessary."""
+    logging.debug("ACK timeout loop started.")
+
+    if not RETRANSMIT_ENABLED:
+        logging.debug("Retransmission is disabled. ACK timeout loop will not run.")
+        return
+
+    while not stop_event.is_set():
+        now_ms = time.time() * 1000.0
+        to_retransmit: list[tuple[int, Datagram, int]] = []
+        to_remove: list[int] = []
+
+        with pending_lock:
+            for i, (msg_id, retries, dgram, last_sent_ms) in enumerate(pending_ack):
+                if (now_ms - last_sent_ms) <= ACK_TIMEOUT_ms:
+                    continue
+
+                if retries >= MAX_RETRIES:
+                    logging.warning(f"Max retries reached for datagram ID {msg_id}. Giving up.")
+                    to_remove.append(i)
+                    continue
+
+                pending_ack[i] = (msg_id, retries + 1, dgram, now_ms)
+                to_retransmit.append((msg_id, dgram, retries + 1))
+
+            for i in reversed(to_remove):
+                pending_ack.pop(i)
+
+        for msg_id, dgram, retry_count in to_retransmit:
+            try:
+                tx_queue.put_nowait(dgram)
+                logging.info(f"Timeout retransmit for datagram ID {msg_id} (retry {retry_count}).")
+            except Full:
+                logging.warning(f"TX queue full. Could not retransmit datagram ID {msg_id}.")
+
+        time.sleep(max(0.05, ACK_TIMEOUT_ms / 1000.0 / 2.0))
+
+    logging.debug("ACK timeout loop stopped.")
+
+
 # ================= Start and Stop of sub threads =================
 def start():
     """Start the SDR Chat Application."""
-    global  tx_thread, tui_thread, ack_timeout_thread
+    global  tx_thread, tui_thread, rx_thread
     
 
 
@@ -250,11 +436,14 @@ def start():
 
         stop_event.clear()
         tx_thread = threading.Thread(target=_tx_loop, daemon=True, name="TX_Thread")
+        rx_thread = threading.Thread(target=_rx_loop, daemon=True, name="RX_Thread")
         tui_thread = threading.Thread(target=_tui_loop, daemon=True, name="TUI_Thread")
-        
+        ack_timeout_thread = threading.Thread(target=_ack_timeout_loop, daemon=True, name="ACK_Timeout_Thread")
 
         tx_thread.start()
+        rx_thread.start()
         tui_thread.start()
+        ack_timeout_thread.start()
         return True
     
     except Exception as e:
@@ -268,7 +457,7 @@ def stop():
     logging.info("Stopping SDR Chat Application...")
     stop_event.set()
 
-    for name, thread in (("TX", tx_thread), ("TUI", tui_thread)):
+    for name, thread in (("TX", tx_thread), ("TUI", tui_thread), ("RX", rx_thread)):
         if thread and thread.is_alive():
             try:
                 thread.join(timeout=2.0)
@@ -281,6 +470,7 @@ def stop():
 
     tx_thread = None  
     tui_thread = None
+    rx_thread = None
 
 
 def _signal_handler(signum, frame):
@@ -312,6 +502,11 @@ def _cleanup():
             tx_queue.get_nowait()
         except Empty:
             break
+    while not rx_queue.empty():
+        try:
+            rx_queue.get_nowait()
+        except Empty:
+            break
 
     # Disconnect SDR
     try:
@@ -339,9 +534,6 @@ def _cleanup():
         logging.error(f"Error closing chat log: {e}")
 
     logging.info("Cleanup completed successfully.")
-
-
-
 
 
     ##################################################################################
@@ -543,7 +735,12 @@ if __name__ == "__main__":
     stop_event: threading.Event = threading.Event()
     tui_refresh_event: threading.Event = threading.Event()
     tx_thread: threading.Thread = None
+    rx_thread: threading.Thread = None
     tui_thread: threading.Thread = None
+    ack_timeout_thread: threading.Thread = None 
+
+    pending_lock = threading.Lock()
+    pending_ack: list[tuple[int, int, Datagram, float]] = []  # List of pending ACKs being tracked for retransmission, each entry is a tuple of (msg_id
 
     progress_lock = threading.Lock()
     tx_total_messages = 0
@@ -556,8 +753,8 @@ if __name__ == "__main__":
     _cleanup_lock = threading.Lock()
 
     # ================== Message queues for inter-thread communication ==================
-    tx_queue: Queue[Datagram] = Queue(maxsize=NUMBER_OF_DATAGRAMS)       # Queue for outgoing messages to be transmitted by the TX thread
-   
+    tx_queue: Queue[Datagram] = Queue(maxsize=64)       # Queue for outgoing messages to be transmitted by the TX thread
+    rx_queue: Queue[Datagram] = Queue(maxsize=NUMBER_OF_DATAGRAMS)       # Queue for incoming messages to be received by the RX thread
 
     # ======================= start application =========================
     if start():
@@ -570,8 +767,23 @@ if __name__ == "__main__":
             _reset_tx_progress(len(test_arr))
 
             _set_stage("Transmitting Datagrams")
-            for dgram in test_arr:
-                queue_datagram(dgram)
+            
+            i = 0   
+
+            while test_arr or (not rx_queue.empty()):
+                if stop_event.is_set():
+                    break
+                try:
+                    if tx_queue.qsize() < 10:
+                        # queue 10 datagrams at a time to avoid overwhelming the TX queue, and allow for retransmitting
+                        for _ in range(min(10, len(test_arr))):
+                            dgram = test_arr[i]     # get the next datagram to send
+                            queue_datagram(dgram)
+                            i += 1
+                except Full:
+                    logging.warning("TX queue is full. Waiting to enqueue datagram...")
+                    time.sleep(0.1)  # Wait briefly before trying to enqueue again
+                    continue
 
             while (not tx_queue.empty()) and (not stop_event.is_set()):
                 time.sleep(1)  # Wait for all messages to be transmitted

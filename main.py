@@ -381,19 +381,6 @@ def _tx_loop():
             signal_for_transmission = _normalize_tx_burst(signal_for_transmission, TX_PEAK_SCALE)
 
             sdr.send_signal(signal_for_transmission)
-            #logging.debug("Datagram length:\t %d bytes.", len(tx_datagram.pack()))
-            #logging.debug("FEC coded data:\t %s.", fec_coded_data)
-            #logging.debug("FEC coded data length:\t %d bytes.", len(fec_coded_data))
-            #logging.debug("Scrambled data length:\t %d bytes.", len(scrambled_data))
-            #logging.debug("Scrambled data:\t %s", scrambled_data)  
-            #logging.debug("Conv coded data length:\t %d bits.", len(conv_coded_data))
-            #logging.debug("Conv coded data:\t %s", conv_coded_data)  # Print first 192 bits of conv coded data for debugging
-            #logging.debug("Modulated signal length:\t %d symbols.", len(modulated_signal))
-            #logging.debug("Modulated signal:\t %s", modulated_signal[:24])  # Print first 24 symbols of modulated signal for debugging
-            #logging.debug("Signal with Gold length:\t %d symbols.", len(signal_with_gold))
-            #logging.debug("Upsampled signal length:\t %d symbols.", len(upsampled_signal))
-            #logging.debug("Filtered signal length:\t %d symbols.", len(filtered_signal))
-            #logging.debug("Signal for transmission length:\t %d symbols.", len(signal_for_transmission))
 
             if (
                 tx_datagram.get_msg_type == msgType.DATA
@@ -401,7 +388,7 @@ def _tx_loop():
             ):
                 _track_sent_data(tx_datagram) 
             
-            time.sleep(0.1)  # Sleep briefly to allow SDR to process transmission
+            time.sleep(0.05)  # Sleep briefly to allow SDR to process transmission
 
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
         except Empty:

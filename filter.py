@@ -134,6 +134,10 @@ if __name__ == "__main__":
     # Example usage of RRCFilter
     rrc_filter = RRCFilter(config)
 
+    print(f"symbol period:\t{rrc_filter.symbol_periode:.6e}")
+    print(f"number of taps: {len(rrc_filter.coefficients)}")
+    print(f"calculated number of taps = {rrc_filter.symbol_periode * rrc_filter.filter_span}")
+
     rc = signal.convolve(rrc_filter.coefficients, rrc_filter.coefficients, mode='same')
     
     plotter = StaticSDRPlotter()

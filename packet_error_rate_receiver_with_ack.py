@@ -22,6 +22,7 @@ from yaml import safe_load
 from chat_tui import ChatTUI
 from modulation import ModulationProtocol
 from datagram import Datagram, msgType
+from packet_error_rate_transmitter_with_ack import _inc_tx_sent
 from sdr_transciever import SDRTransciever
 from filter import RRCFilter
 from gold_detection import GoldCodeDetector
@@ -33,42 +34,10 @@ from interleaver import Interleaver
 from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
-
 NUMBER_OF_DATAGRAMS = 1000
 TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
-STAGES = (
-    "Generating Datagrams",
-    "Transmitting Datagrams",
-)
-SPINNER_FRAMES = ("|", "/", "-", "\\")
-
-def _reset_tx_progress(total: int) -> None:
-    global tx_total_messages, tx_sent_messages
-    with progress_lock:
-        tx_total_messages = int(total)
-        tx_sent_messages = 0
-
-
-def _inc_tx_sent() -> None:
-    global tx_sent_messages
-    with progress_lock:
-        tx_sent_messages += 1
-
-
-def _tx_progress_snapshot() -> tuple[int, int]:
-    with progress_lock:
-        return tx_sent_messages, tx_total_messages
-
-
-def _format_progress_bar(done: int, total: int, width: int = 40) -> str:
-    if total <= 0:
-        return f"[{'-' * width}]   0.00% (0/0)"
-    done = max(0, min(done, total))
-    filled = int((done / total) * width)
-    bar = "#" * filled + "-" * (width - filled)
-    pct = (done / total) * 100.0
-    return f"[{bar}] {pct:6.2f}% ({done}/{total})"
+SPINNER = ['|', '/', '-', '\\']
 
 
 def generate_test_datagrams(num_datagrams: int) -> list[Datagram]:
@@ -115,6 +84,7 @@ def num_datagram_errors(original: list[Datagram], received: list[Datagram]) -> i
 
 
 
+
 ##################################################################################
 # ============================== Message Handling ================================
 ##################################################################################
@@ -133,7 +103,115 @@ def queue_datagram(datagram: Datagram) -> bool:
 ##############################################################################################
 # ================= Callback loops for threads =================
 ##############################################################################################
+def _rx_loop():
+    """Receive loop - continuously receive data from SDR and process it."""
+    logging.debug("RX loop started.")
 
+    while not stop_event.is_set():
+        try:
+            received_signal = sdr.sdr.rx()
+
+            coarse_freq_adjusted = synchronizer.coarse_frequenzy_synchronization(received_signal)
+            if coarse_freq_adjusted is None:
+                continue    # skip if signal is too weak to process
+
+            padded_signal = matched_filter.pad_signal_front_and_back(coarse_freq_adjusted)  
+            filtered_signal = matched_filter.apply_filter(padded_signal)
+            time_adjusted = synchronizer.gardner_timing_synchronization(filtered_signal)
+            fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
+            gold_index, _ = gold_detector.detect_with_rotation(
+                fine_freq_adjusted,
+                EXPECTED_PAYLOAD_SYMBOLS,
+            )
+
+            if gold_index is None:
+                # logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
+                continue   # skip if gold code is not detected, likely not a valid signal to process
+            if not gold_detector.candidate_fits_frame(
+                len(fine_freq_adjusted), 
+                gold_index,
+                EXPECTED_PAYLOAD_SYMBOLS
+            ):
+                continue
+            best_rotation = gold_detector.estimate_rotation_from_gold(
+                fine_freq_adjusted,
+                gold_index,
+            )
+
+    
+                
+            ### The following section attempts to decode the payload using the best rotation estimate from the gold code.
+            ### Falls back to trying other rotations if decoding fails. 
+            ### This is to handle cases where the gold-based rotation estimate is not perfect, which can happen at low SNR.
+
+            received_datagram = None
+
+            def apply_equalizer(rotated_signal: np.ndarray) -> np.ndarray:
+                if not EQUALIZER_ENABLED:
+                    return rotated_signal
+                return equalize_from_known_header(
+                    rotated_signal,
+                    gold_index,
+                    gold_detector.gold_symbols[0],
+                )
+
+            for rotation in _decode_rotation_fallback_order(
+                best_rotation,
+                modulation_protocol.modulation_type,
+            ):
+                try:
+                    rotated_signal = gold_detector.rotate_signal(fine_freq_adjusted, rotation)
+                    equalized_signal = apply_equalizer(rotated_signal)
+                    frame_synched_signal = gold_detector.remove_gold_symbols(
+                        equalized_signal,
+                        gold_index,
+                        EXPECTED_PAYLOAD_SYMBOLS,
+                    )
+                    received_bits = modulation_protocol.demodulate_signal(frame_synched_signal)
+
+                    conv_decoded_bytes = conv_coder.decode(received_bits)
+                    descrambled_bytes = scrambler.apply(conv_decoded_bytes)
+                    interleaved_bytes = interleaver.deinterleave(descrambled_bytes)
+                    fec_decoded_bits = fec_codec.decode(interleaved_bytes)
+                    received_datagram = Datagram.unpack(fec_decoded_bits)
+
+                    break
+                except (ValueError, RuntimeError) as e:
+                    logging.debug(
+                        "Rotation decode attempt failed: gold_index=%s rotation=%s error=%s",
+                        gold_index,
+                        rotation,
+                        e,
+                    )
+                    continue
+
+            if received_datagram is None:
+                continue
+            
+            if received_datagram.get_msg_type == msgType.DATA:
+                logging.info(f"Received datagram: ID {received_datagram.get_msg_id}, Payload {received_datagram.get_payload_as_string()}")
+                ack_dgram = Datagram.as_ack(received_datagram.get_msg_id, received_datagram.get_timestamp_ms, payload=received_datagram.get_payload)
+                queue_datagram(ack_dgram)  # Send ACK for received datagram
+                try:
+                    rx_queue.put(received_datagram)
+                except Full:
+                    logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
+                    continue
+
+        except ValueError as e:
+            logging.warning(f"Did not receive valid signal: {e}")
+            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+            continue
+        except RuntimeError as e:
+            logging.error(f"Runtime error in RX loop: {e}")
+            stop_event.set()  # Trigger shutdown on critical errors
+            break
+        except Exception as e:
+            logging.error(f"Unexpected error in RX loop: {e}")
+            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+            continue
+
+    logging.debug("RX loop stopped.")
 
 def _tx_loop():
     """Transmit loop - continuously check for outgoing messages and transmit them."""
@@ -157,13 +235,12 @@ def _tx_loop():
                 padded_signal = matched_filter.pad_signal_front_and_back(upsampled_signal)  # Pad signal to avoid edge effects from filtering
                 filtered_signal = matched_filter.apply_filter(padded_signal)
 
-
             # add guard symbols before and after the signal.
             signal_for_transmission = np.concatenate([GUARD_SYMBOLS, filtered_signal, GUARD_SYMBOLS])
             signal_for_transmission = _normalize_tx_burst(signal_for_transmission, TX_PEAK_SCALE)
 
             sdr.send_signal(signal_for_transmission)
-            _inc_tx_sent()
+
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
 
             time.sleep(0.05)
@@ -181,64 +258,30 @@ def _tx_loop():
     logging.debug("TX loop stopped.")
 
 
-def _set_stage(stage_name: str):
-    global current_stage_idx
-    with stage_lock:
-        idx = STAGES.index(stage_name)
-        current_stage_idx = idx
-        for i in range(idx):
-            stage_done[i] = True
-
-def _mark_all_done():
-    global current_stage_idx
-    with stage_lock:
-        for i in range(len(STAGES)):
-            stage_done[i] = True
-        current_stage_idx = len(STAGES) - 1
-    
 def _tui_loop():
-    """Render PER test progress in terminal with rotating spinner."""
-    frame_idx = 0
-    try:
-        while not stop_event.is_set():
-            with stage_lock:
-                idx = current_stage_idx
-                done_snapshot = stage_done.copy()
+    """TUI loop - continuously refresh the terminal user interface."""
+    logging.debug("TUI loop started.")
+    i = 0
+    num_spinner_states = len(SPINNER)
+    while not stop_event.is_set():
+        try:
+            print("\033c", end="")  # Clear terminal
+            print(f"({SPINNER[i % num_spinner_states]})")
+            i += 1
+            time.sleep(0.5)  # Adjust refresh rate as needed
+            
+        except Exception as e:
+            logging.error(f"Error in TUI loop: {e}")
+            continue
+    logging.debug("TUI loop stopped.")
 
-            sent, total = _tx_progress_snapshot()
-
-            sys.stdout.write("\033[2J\033[H")
-            sys.stdout.write("PER Test Progress\n")
-            sys.stdout.write("=================\n")
-
-            spinner = SPINNER_FRAMES[frame_idx % len(SPINNER_FRAMES)]
-            frame_idx += 1
-
-            for i, label in enumerate(STAGES):
-                if done_snapshot[i]:
-                    suffix = "(done)"
-                elif i == idx:
-                    suffix = f"({spinner})"
-                else:
-                    suffix = "( )"
-                sys.stdout.write(f"- {label} {suffix}\n")
-
-            sys.stdout.write("\n")
-            sys.stdout.write(f"Transmitted: {_format_progress_bar(sent, total)}\n")
-
-            sys.stdout.flush()
-            time.sleep(0.12)
-    finally:
-        sys.stdout.write("\033[2J\033[H")
-        sys.stdout.flush()
 
 
 # ================= Start and Stop of sub threads =================
 def start():
     """Start the SDR Chat Application."""
-    global  tx_thread, tui_thread, ack_timeout_thread
-    
-
+    global rx_thread, tx_thread, tui_thread
+    logging.info("Starting SDR Chat Application...")
 
     if sdr.connect():  
         synchronizer.set_noise_floor(sdr.measure_noise_floor_dB())
@@ -247,12 +290,11 @@ def start():
         return False
     
     try:
-
         stop_event.clear()
+        rx_thread = threading.Thread(target=_rx_loop, daemon=True, name="RX_Thread")
         tx_thread = threading.Thread(target=_tx_loop, daemon=True, name="TX_Thread")
         tui_thread = threading.Thread(target=_tui_loop, daemon=True, name="TUI_Thread")
-        
-
+        rx_thread.start()
         tx_thread.start()
         tui_thread.start()
         return True
@@ -262,30 +304,61 @@ def start():
         stop_event.set()
         return False
 
+
 def stop():
     """Stop the SDR Chat Application."""
-    global tx_thread, tui_thread, ack_timeout_thread
+    global rx_thread, tx_thread, tui_thread
     logging.info("Stopping SDR Chat Application...")
     stop_event.set()
 
-    for name, thread in (("TX", tx_thread), ("TUI", tui_thread)):
-        if thread and thread.is_alive():
-            try:
-                thread.join(timeout=2.0)
-                if thread.is_alive():
-                    logging.warning(f"{name} thread did not stop within timeout")
-            except Exception as e:
-                logging.error(f"Error waiting for {name} thread: {e}")
+
+    try:
+        rx_thread.join(timeout=2.0)
+        if rx_thread.is_alive():
+            logging.warning(f"RX thread did not stop within timeout")
+        tui_thread.join(timeout=2.0)
+        if tui_thread.is_alive():
+            logging.warning(f"TUI thread did not stop within timeout")
+        tx_thread.join(timeout=2.0)
+        if tx_thread.is_alive():
+            logging.warning(f"TX thread did not stop within timeout")
+
+    except Exception as e:
+        logging.error(f"Error waiting for threads: {e}")
 
     # clear references
-
-    tx_thread = None  
+    rx_thread = None 
+    tx_thread = None
     tui_thread = None
 
 
+def finalize_result_once():
+    """Calculate and log final results. Idempotent."""
+    global finalized
+
+    with finalize_lock:
+        if finalized:
+            return
+        finalized = True
+
+    received_datagrams = []
+    while not rx_queue.empty():
+        try:
+            received_datagram = rx_queue.get_nowait()
+            received_datagrams.append(received_datagram)
+        except Empty:
+            break
+
+    per = num_datagram_errors(test_arr, received_datagrams)
+    print(f"\nSent {len(test_arr)} datagrams, received {len(received_datagrams)} datagrams, with {per} datagram errors.")
+
 def _signal_handler(signum, frame):
     """Handle termination signals for graceful shutdown."""
-    logging.info(f"Signal {signum} received. Initiating graceful shutdown...")
+    while tx_queue.empty() is False:
+        time.sleep(0.1)  # Wait for TX queue to drain before finalizing results
+
+    finalize_result_once()
+    # Terminate application after calculating results
     stop_event.set()
 
 def _cleanup():
@@ -306,10 +379,9 @@ def _cleanup():
     stop()
 
     # Drain queues
-
-    while not tx_queue.empty():
+    while not rx_queue.empty():
         try:
-            tx_queue.get_nowait()
+            rx_queue.get_nowait()
         except Empty:
             break
 
@@ -321,33 +393,11 @@ def _cleanup():
     except Exception as e:
         logging.error(f"Error disconnecting SDR: {e}")
 
-    # Remove temporary filter file
-    try:
-        if hasattr(matched_filter, "hardware_filter_enable") and matched_filter.hardware_filter_enable:
-            filter_file = config["radio"]["hardware_filter_file"]
-            if os.path.exists(filter_file):
-                os.remove(filter_file)
-                logging.info(f"Deleted temporary filter file: {filter_file}")
-    except Exception as e:
-        logging.error(f"Error deleting temporary filter file: {e}")
-
-    # Session end marker
-    try:
-        with open(log_file, "a") as f:
-            f.write(f"\n--- Chat Session Ended at {datetime.now().strftime('%H:%M:%S')} ---\n")
-    except Exception as e:
-        logging.error(f"Error closing chat log: {e}")
-
-    logging.info("Cleanup completed successfully.")
-
-
-
 
 
     ##################################################################################
     # ================== Helper functions for runtime ==================
     ###################################################################################
-
 def _normalize_tx_burst(signal: np.ndarray, target_peak: float) -> np.ndarray:
     """
     Scale one TX burst to a fixed peak amplitude before sending it to Pluto.
@@ -469,7 +519,6 @@ def calculate_expected_payload_symbols(
     
 
 
-
 if __name__ == "__main__":
     # ================= read configuration file =================
     try:
@@ -497,25 +546,6 @@ if __name__ == "__main__":
     EQUALIZER_REGULARIZATION = float(
     config["synchronization"].get("short_equalizer_regularization", 1.0e-3)
 )
-    # ================== Logging setup ==================
-    log_dir = "log"
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"{datetime.now().date()}-chat-history.txt")
-    debug_file = os.path.join(log_dir, f"{datetime.now().date()}-debug.log")
-    configure_project_logging(
-        level_name=get_configured_log_level(config),
-        session_name="debug",
-        log_file=debug_file,
-        console=True,
-        file_output=True,
-    )
-
-    try:
-        with open(log_file, 'a') as f:
-            f.write(f"\n\n--- New Chat Session Started at {datetime.now().time()} ---\n")
-    except Exception as e:
-        logging.error(f"Error initializing chat history log: {e}")
-        raise e
     
     # ================== Signal handlers for graceful shutdown ==================
     atexit.register(_cleanup)
@@ -531,7 +561,6 @@ if __name__ == "__main__":
     fec_codec = FCCodec(config)
     conv_coder = ConvolutionalCoder(config)
     matched_filter = RRCFilter(config)
-    tui = ChatTUI(config)
     gold_detector = GoldCodeDetector(config)
     synchronizer = Synchronizer(config)
     sdr = SDRTransciever(config) # must be initilized after Matched Filter module.
@@ -542,49 +571,38 @@ if __name__ == "__main__":
     # ================== Threading and synchronization primitives ==================
     stop_event: threading.Event = threading.Event()
     tui_refresh_event: threading.Event = threading.Event()
+    rx_thread: threading.Thread = None
     tx_thread: threading.Thread = None
     tui_thread: threading.Thread = None
-
-    progress_lock = threading.Lock()
-    tx_total_messages = 0
-    tx_sent_messages = 0
-    stage_lock = threading.Lock()
-    current_stage_idx = 0
-    stage_done = [False] * len(STAGES)
-
     _cleaned_up = False
     _cleanup_lock = threading.Lock()
 
+    finalized = False
+    finalize_lock = threading.Lock()
+
     # ================== Message queues for inter-thread communication ==================
-    tx_queue: Queue[Datagram] = Queue(maxsize=NUMBER_OF_DATAGRAMS)       # Queue for outgoing messages to be transmitted by the TX thread
-   
+    rx_queue: Queue[Datagram] = Queue(maxsize=NUMBER_OF_DATAGRAMS)       # Queue for incoming messages received by the RX thread to be processed by the TUI thread
+    tx_queue: Queue[Datagram] = Queue(maxsize=NUMBER_OF_DATAGRAMS)       # Queue for outgoing messages from the TUI thread to be transmitted by the TX thread
 
     # ======================= start application =========================
     if start():
         logging.info("SDR Chat Application is running. Press Ctrl+C to stop.")
 
         try:
-            _set_stage("Generating Datagrams")
             test_arr = generate_test_datagrams(NUMBER_OF_DATAGRAMS)
 
-            _reset_tx_progress(len(test_arr))
-
-            _set_stage("Transmitting Datagrams")
-            for dgram in test_arr:
-                queue_datagram(dgram)
-
-            while (not tx_queue.empty()) and (not stop_event.is_set()):
-                time.sleep(1)  # Wait for all messages to be transmitted
-  
-            time.sleep(2)
-
-            _mark_all_done()
-            
+            while not stop_event.is_set():
+                time.sleep(1)  # Main thread can perform periodic tasks here if needed
+                
         except KeyboardInterrupt:
-            logging.info("KeyboardInterrupt received. Stopping application...")
+            while tx_queue.empty() is False:
+                time.sleep(0.1)  # Wait for TX queue to drain before finalizing results
+
+            finalize_result_once()
             stop_event.set()
 
         finally:
+            finalize_result_once()
             _cleanup()
 
     else:
