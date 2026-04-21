@@ -34,32 +34,12 @@ from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
 NUMBER_OF_DATAGRAMS = 100      # Number of datagrams to measure start time and end time for calculating packet error rate. Adjust as needed for testing.
-TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
 SPINNER = ['|', '/', '-', '\\']
 
 num_received_datagrams = 0      # counter for datagrams received during datarate test.
 test_start_time = None         # Timestamp when the first datagram is received during the test.
 test_end_time = None           # Timestamp when the last datagram is received during the test.
-
-def generate_test_datagrams(num_datagrams: int) -> list[Datagram]:
-    datagrams = []
-    for i in range(num_datagrams):
-        msg_id = i % 256  # Wrap around at 255
-        timestamp_ms = int(time.time() * 1000) % (2**32)  # Current time in ms, wrapped to fit in uint32
-        _payload = np.array([], dtype=np.uint8) # Simple payload: string representation of the index
-        while i > 0:
-            _payload = np.append(arr=_payload, values=np.uint8(i % 256))
-            i //= 256
-
-        dgram = Datagram(
-            msg_id=msg_id, 
-            timestamp_ms=timestamp_ms,
-            msg_type=msgType.DATA,
-            payload=_payload
-        )
-        datagrams.append(dgram)
-    return datagrams
 
 def num_bit_errors(a: npt.NDArray[np.uint8], b: npt.NDArray[np.uint8]) -> int:
     """Count the number of bit errors in a binary array."""
@@ -143,7 +123,6 @@ def _rx_loop():
             )
 
     
-                
             ### The following section attempts to decode the payload using the best rotation estimate from the gold code.
             ### Falls back to trying other rotations if decoding fails. 
             ### This is to handle cases where the gold-based rotation estimate is not perfect, which can happen at low SNR.
@@ -193,21 +172,16 @@ def _rx_loop():
                 continue
 
             num_received_datagrams += 1
-            if num_received_datagrams == 0:
+            if num_received_datagrams == 1:
                 logging.info(f"Received first datagram ID {received_datagram.get_msg_id}. Starting timer for datagram error rate test.")
                 test_start_time = time.time()
             elif num_received_datagrams == NUMBER_OF_DATAGRAMS:
                 test_end_time = time.time()
                 stop_event.set()  # Stop after receiving the specified number of datagrams for testing
-            try:
-                rx_queue.put(received_datagram)
-            except Full:
-                logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
-                continue
 
         except ValueError as e:
             logging.warning(f"Did not receive valid signal: {e}")
-            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+            #time.sleep(0.05)
             continue
         except RuntimeError as e:
             logging.error(f"Runtime error in RX loop: {e}")
@@ -215,7 +189,7 @@ def _rx_loop():
             break
         except Exception as e:
             logging.error(f"Unexpected error in RX loop: {e}")
-            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+            ##time.sleep(0.05)
             continue
 
     logging.debug("RX loop stopped.")
@@ -232,7 +206,7 @@ def _tui_loop():
             print(f"Measuring packet error rate... Received {num_received_datagrams} datagrams so far.")
             print(f"({SPINNER[i % num_spinner_states]})")
             i += 1
-            time.sleep(1)  # Adjust refresh rate as needed
+            time.sleep(2)  # Adjust refresh rate as needed
             
         except Exception as e:
             logging.error(f"Error in TUI loop: {e}")
@@ -275,12 +249,14 @@ def stop():
 
 
     try:
-        rx_thread.join(timeout=2.0)
-        if rx_thread.is_alive():
-            logging.warning(f"RX thread did not stop within timeout")
-        tui_thread.join(timeout=2.0)
-        if tui_thread.is_alive():
-            logging.warning(f"TUI thread did not stop within timeout")
+        if rx_thread is not None:
+            rx_thread.join(timeout=3.0)
+            if rx_thread.is_alive():
+                logging.warning(f"RX thread did not stop within timeout")
+        if tui_thread is not None:
+            tui_thread.join(timeout=3.0)
+            if tui_thread.is_alive():
+                logging.warning(f"TUI thread did not stop within timeout")
         
     except Exception as e:
         logging.error(f"Error waiting for threads: {e}")
@@ -436,7 +412,18 @@ def calculate_expected_payload_symbols(
     logging.debug(f"Calculated expected payload symbols: {conv_output_bits // bps}")
     return conv_output_bits // bps
 
-    
+def print_test_results():
+    elapsed_time = (
+        test_end_time - test_start_time 
+        if (test_start_time is not None and test_end_time is not None) 
+        else None
+    )
+    datarate = (num_received_datagrams / elapsed_time) if elapsed_time else None
+
+    print(f"Received {num_received_datagrams} datagrams during test.")
+    print(f"Elapsed time: {elapsed_time:.2f} seconds" if elapsed_time else "Elapsed time: N/A")
+    print(f"Datarate: {datarate:.2f} datagrams/second" if datarate else "Datarate: N/A")
+
 
 
 if __name__ == "__main__":
@@ -507,18 +494,14 @@ if __name__ == "__main__":
         logging.info("SDR Chat Application is running. Press Ctrl+C to stop.")
         try:
             while not stop_event.is_set():
-                time.sleep(1)  # Main thread can perform periodic tasks here if needed
-            elapsed_time = test_end_time - test_start_time if (test_start_time and test_end_time) else None
-            datarate = (num_received_datagrams / elapsed_time) if elapsed_time else None
-
-            print(f"Received {num_received_datagrams} datagrams during test.")
-            print(f"Elapsed time: {elapsed_time}")
-            print(f"Datarate: {datarate}")
+                time.sleep(5)  # Main thread can perform periodic tasks here if needed
 
         except KeyboardInterrupt:
             stop_event.set()
 
         finally:
+            stop()
+            print_test_results()
             _cleanup()
 
     else:

@@ -1,0 +1,52 @@
+range: 2.5 meters, sleep time: 0.095 seconds for RX loop
+Received 1000 datagrams during test.
+Elapsed time: 82.81 seconds
+Datarate: 12.08 datagrams/second
+
+
+range: 2.5 meters, sleep time: 0.05 seconds for RX loop
+Received 1000 datagrams during test.
+Elapsed time: 148.51 seconds
+Datarate: 6.73 datagrams/second
+
+range: 2.5 meters, sleep time: 0.075 seconds for RX loop
+Received 1000 datagrams during test.
+Elapsed time: 222.62 seconds
+Datarate: 4.49 datagrams/second
+
+
+range: 2.5 meters, sleep time: 0.035 seconds for RX loop
+rx_gain_mode: maual, gain 30 dB
+Received 100 datagrams during test.
+Elapsed time: 7.16 seconds
+Datarate: 13.97 datagrams/second
+
+range: 2.5 meters, sleep time: 0.025 seconds for RX loop
+rx_gain_mode: maual, gain 30 dB
+Received 100 datagrams during test.
+Elapsed time: 6.77 seconds
+Datarate: 14.78 datagrams/second
+
+range: 2.5 meters, sleep time: 0.015 seconds for RX loop
+rx_gain_mode: maual, gain 30 dB
+Received 100 datagrams during test.
+Elapsed time: 5.98 seconds
+Datarate: 16.73 datagrams/second
+
+range: 2.5 meters, sleep time: 0.005 seconds for RX loop
+rx_gain_mode: maual, gain 30 dB
+eceived 100 datagrams during test.
+Elapsed time: 5.08 seconds
+Datarate: 19.69 datagrams/second
+
+range: 2.5 meters, sleep time: 0.001 seconds for RX loop
+rx_gain_mode: maual, gain 30 dB
+Received 100 datagrams during test.
+Elapsed time: 6.16 seconds
+Datarate: 16.24 datagrams/second
+
+range: 2.5 meters, sleep time: 0.005 seconds for RX loop
+rx_gain_mode: maual, gain 35 dB
+Received 100 datagrams during test.
+Elapsed time: 4.93 seconds
+Datarate: 20.27 datagrams/second
