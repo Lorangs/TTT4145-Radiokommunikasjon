@@ -165,7 +165,7 @@ def _tx_loop():
             sdr.send_signal(signal_for_transmission)
             _inc_tx_sent()
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
-            time.sleep(0.05)
+            time.sleep(0.005)
         except Empty:
             continue  # No message to send, loop again
         except RuntimeError as e:
