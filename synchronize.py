@@ -355,9 +355,6 @@ class Synchronizer:
         #    sync_cfg.get("short_equalizer_min_training_symbols", 32)
         #)
 
-        print(f"Costas loop parameters: Kp={self.costas_Kp:.6f}, Ki={self.costas_Ki:.6f}")
-        print(f"Gardner loop parameters: Kp={self.gardner_Kp:.6f}, Ki={self.gardner_Ki:.6f}")
-        
         if self.modulation_scheme == 'BPSK':
             self.modulation_order = 2.0    
         elif self.modulation_scheme == 'QPSK':
