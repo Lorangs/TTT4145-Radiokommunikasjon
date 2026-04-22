@@ -17,14 +17,8 @@ def train_3tap_equalizer(received_symbols, known_symbols) -> npt.NDArray[np.comp
     """
     Train a 3-tap complex FIR equalizer from known header symbols.
     """
-    received = _as_complex_1d(received_symbols, "received_symbols").astype(
-        np.complex64,
-        copy=False,
-    )
-    target = _as_complex_1d(known_symbols, "known_symbols").astype(
-        np.complex64,
-        copy=False,
-    )
+    received = _as_complex_1d(received_symbols, "received_symbols")
+    target = _as_complex_1d(known_symbols, "known_symbols")
 
     if received.size != target.size:
         raise ValueError("received_symbols and known_symbols must have the same length.")
@@ -40,15 +34,12 @@ def train_3tap_equalizer(received_symbols, known_symbols) -> npt.NDArray[np.comp
     return taps.astype(np.complex64, copy=False)
 
 
-def apply_3tap_equalizer(rx_symbols, taps) -> npt.NDArray[np.complex64]:
+def apply_3tap_equalizer(rx_symbols , taps) -> npt.NDArray[np.complex64]:
     """
     Apply the centered 3-tap complex FIR equalizer.
     """
-    received = _as_complex_1d(rx_symbols, "rx_symbols").astype(
-        np.complex128,
-        copy=False,
-    )
-    coefficients = _as_complex_1d(taps, "taps").astype(np.complex64, copy=False)
+    received = _as_complex_1d(rx_symbols, "rx_symbols")
+    coefficients = _as_complex_1d(taps, "taps")
     if coefficients.size != 3:
         raise ValueError("taps must contain exactly 3 coefficients.")
 
@@ -63,7 +54,7 @@ def apply_3tap_equalizer(rx_symbols, taps) -> npt.NDArray[np.complex64]:
             + center * coefficients[1]
             + right * coefficients[2]
         )
-    return equalized.astype(np.complex64, copy=False)
+    return equalized
 
 
 def equalize_from_known_header(
