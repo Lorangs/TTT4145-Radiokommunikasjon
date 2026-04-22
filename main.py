@@ -15,6 +15,8 @@ if os.name == "nt":
     import msvcrt
 else:
     import select
+    import termios
+    import tty
 
 # import third party moduels
 import numpy as np
@@ -73,8 +75,7 @@ def _ack_received(msg_id: int) -> None:
     with pending_lock:
         idx = _find_pending_index(msg_id)
         if idx is not None:
-
-            ack_dgram = pending_ack.pop(idx)[2]
+            pending_ack.pop(idx)
 
 
 
@@ -282,14 +283,13 @@ def _rx_loop():
                 stem=f"rx_payload_symbol_eye_q_after_selected_rotation_{timestamp}",
             )
 
-            tui_refresh_event.set()  # Signal TUI to refresh display
-
+            
             if received_datagram.get_msg_type == msgType.DATA:
                 logging.info(f"Received datagram: {received_datagram}")
                 try:
-                    rx_queue.put(received_datagram)
+                    ui_queue.put_nowait((received_datagram, False))  # Put received datagram in queue for TUI to process with "sent by us" flag set to False
                 except Full:
-                    logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
+                    logging.warning(f"User input queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
                     continue
 
                 if ACK_ENABLED:
@@ -302,21 +302,18 @@ def _rx_loop():
                 if PENDING_TRACKING_ENABLED:
                     _ack_received(int(received_datagram.get_msg_id))
 
-                # Put the ack in rx_queue for tui to process the ack as well.
+                # Put the ack in ui_queue for tui to process the ack as well.
                 try:
-                    rx_queue.put(received_datagram)
+                    ui_queue.put_nowait((received_datagram, False))
                 except Full:
-                    logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
+                    logging.error(f"UI queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
                     continue
 
-            
-
-            # retransmit the previous sent message.
+            # retransmit the previous sent message.h
             elif received_datagram.get_msg_type == msgType.NACK:
                 logging.info(f"Received NACK. Retransmitting oldest pending message if any.")
                 if RETRANSMIT_ENABLED:
                     _retransmit_oldest_pending()
-                
             else:
                 logging.warning(f"Received message with unknown type: {received_datagram.get_msg_type}")
                 raise ValueError("Unknown message type received.")
@@ -397,7 +394,12 @@ def _tx_loop():
                 and PENDING_TRACKING_ENABLED
             ):
                 _track_sent_data(tx_datagram) 
-            
+                try:
+                    ui_queue.put_nowait((tx_datagram, True))  # Put sent datagram in queue for TUI to process with "sent by us" flag set to True
+                except Full:
+                    logging.warning(f"User input queue is full. Dropping sent datagram ID {tx_datagram.get_msg_id} for TUI processing.")
+                    pass
+                
             time.sleep(0.05)  # Sleep briefly to allow SDR to process transmission
 
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
@@ -418,98 +420,116 @@ def _tui_loop():
     """TUI loop - continuously check for user input and enqueue messages to send."""
     logging.debug("TUI loop started.")
 
+    fps = 10    # Frames Per Second
+    render_interval = 1.0 / fps
+    next_render_time = time.monotonic()
     tui.render_screen()  # Initial render of TUI
 
+
     while not stop_event.is_set():
+ 
+        # consume all pending incoming datagrams
         try:
+            while True:
+                datagram, sent_by_us = ui_queue.get_nowait()
+                tui.add_message(datagram, sent_by_us=sent_by_us)
+        except Empty:
+            pass
 
-            if tui_refresh_event.is_set():
-                while not rx_queue.empty():
-                    try:
-                        received_datagram: Datagram = rx_queue.get_nowait()
-                        tui.add_message(received_datagram)
-                        logging.debug(f"TUI processed received datagram ID: {received_datagram.get_msg_id}")
-                    except Empty:
-                        break  # No more messages to process
-                tui.render_screen()  # Update TUI display
-                tui_refresh_event.clear()  # Reset event
-
-            user_input = _poll_user_input()
-            if user_input is not None:
+        # process completed user input lines
+        try:
+            while True:
+                user_input = user_input_queue.get_nowait()
                 if user_input.lower() == "/quit":
-                    logging.info("User requested to quit. Stopping application...")
+                    logging.info("User requested to quit. Stopping application.")
                     stop_event.set()
                     break
                 elif user_input.startswith("/"):
                     logging.warning(f"Unknown command: {user_input}")
-                    continue  # Ignore unknown commands
-
+                    continue
+                    
                 # send message as datagram
-                while len(user_input.encode('utf-8')) > int(config['datagram']['payload_size']):
+                while len(user_input.encode('utf-8')) > PAYLOAD_SIZE:
                     logging.warning("Input message is too long and will be truncated to fit payload size.")
-                    sliced_user_input = user_input[: int(config['datagram']['payload_size'])]
+                    sliced_user_input = user_input[:PAYLOAD_SIZE ]
                     datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
                     queue_datagram(datagram)
-                    user_input = user_input[int(config['datagram']['payload_size']) :]  # Remove the part that was sent
+                    user_input = user_input[PAYLOAD_SIZE :]  # Remove the part that was sent
                 
-                # Final slice (or if input was already short enough)
-                sliced_user_input = user_input
-                datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
-                queue_datagram(datagram)
-                tui.add_message(datagram)  # Add sent message to TUI display
-                tui.render_screen()  # Update TUI display after sending message
-    
-        except Exception as e:
-            logging.error(f"Error in TUI loop: {e}")
-            continue
+                # Send the remaining part of the message that fits in the payload
+                if user_input:
+                    datagram = Datagram.as_string(user_input, msg_type=msgType.DATA)
+                    queue_datagram(datagram)
 
-        time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+        except Empty:
+            pass
+
+        # render TUI at fixed intervals
+        now = time.monotonic()
+        if now >= next_render_time:
+            tui.render_screen()
+            next_render_time = now + render_interval
+
+        time.sleep(0.01) # Sleep briefly to reduce CPU usage
     logging.debug("TUI loop stopped.")
 
+def _user_input_loop():
+    """
+        Blocking input loop: only enqueue complete lines of user input. 
+    """
+    global _input_buffer
 
-_windows_input_buffer = ""
-
-
-def _poll_user_input() -> str | None:
-    """Read one terminal line without blocking the TUI loop."""
-    global _windows_input_buffer
+    logging.debug("User input loop started.")
+    old_settings = None
 
     if os.name != "nt":
-        ready_to_read, _, _ = select.select([sys.stdin], [], [], 0.1)
-        if ready_to_read:
-            return sys.stdin.readline().strip()
-        return None
+        # Set terminal to raw mode to allow non-blocking input
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        tty.setcbreak(fd)
 
-    if not msvcrt.kbhit():
-        return None
+    try:
+        while not stop_event.is_set():
+            if os.name == "nt":
+                if not msvcrt.kbhit():
+                    time.sleep(0.05)
+                    continue
+                char = msvcrt.getwch()
+            else:
+                ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+                if not ready:
+                    continue
+                char = sys.stdin.read(1)
 
-    while msvcrt.kbhit():
-        char = msvcrt.getwch()
+            if char in ("\r", "\n"):
+                line = _input_buffer.strip()
+                _input_buffer = ""
+                tui.set_current_input("")
+                if line:
+                    try:
+                        user_input_queue.put_nowait(line)
+                    except Full:
+                        logging.warning("User input queue full. Dropping line.")
+                continue
 
-        if char in ("\r", "\n"):
-            completed = _windows_input_buffer
-            _windows_input_buffer = ""
-            print()
-            return completed.strip()
+            if char == "\x7f" or char == "\b":
+                _input_buffer = _input_buffer[:-1]
+            elif char == "\003":
+                stop_event.set()
+                break
+            elif char not in ("\x00", "\xe0"):
+                _input_buffer += char
 
-        if char == "\003":
-            raise KeyboardInterrupt
+            tui.set_current_input(_input_buffer)
+            time.sleep(0.01)  # Sleep briefly to reduce CPU usage
 
-        if char == "\b":
-            if _windows_input_buffer:
-                _windows_input_buffer = _windows_input_buffer[:-1]
-                print("\b \b", end="", flush=True)
-            continue
+    finally:
+        if os.name != "nt" and old_settings is not None:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
-        if char in ("\x00", "\xe0"):
-            if msvcrt.kbhit():
-                msvcrt.getwch()
-            continue
+        logging.debug("User input loop stopped.")
 
-        _windows_input_buffer += char
-        print(char, end="", flush=True)
 
-    return None
         
 def _ack_timeout_loop():
     """ACK timeout loop - periodically check for pending ACKs and retransmit if necessary."""
@@ -555,7 +575,7 @@ def _ack_timeout_loop():
 # ================= Start and Stop of sub threads =================
 def start():
     """Start the SDR Chat Application."""
-    global rx_thread, tx_thread, tui_thread, ack_timeout_thread
+    global rx_thread, tx_thread, tui_thread, ack_timeout_thread, user_input_thread
     
     if sdr.connect():  
         synchronizer.set_noise_floor(sdr.measure_noise_floor_dB())
@@ -568,10 +588,12 @@ def start():
         rx_thread = threading.Thread(target=_rx_loop, daemon=True, name="RX_Thread")
         tx_thread = threading.Thread(target=_tx_loop, daemon=True, name="TX_Thread")
         tui_thread = threading.Thread(target=_tui_loop, daemon=True, name="TUI_Thread")
+        user_input_thread = threading.Thread(target=_user_input_loop, daemon=True, name="User_Input_Thread")
         ack_timeout_thread = threading.Thread(target=_ack_timeout_loop, daemon=True, name="ACK_Timeout_Thread")
         rx_thread.start()
         tx_thread.start()
         tui_thread.start()
+        user_input_thread.start()
         ack_timeout_thread.start()
         return True
     
@@ -583,11 +605,11 @@ def start():
 
 def stop():
     """Stop the SDR Chat Application."""
-    global rx_thread, tx_thread, tui_thread, ack_timeout_thread
+    global rx_thread, tx_thread, tui_thread, ack_timeout_thread, user_input_thread 
     logging.info("Stopping SDR Chat Application...")
     stop_event.set()
 
-    for name, thread in (("RX", rx_thread), ("TX", tx_thread), ("TUI", tui_thread), ("ACK Timeout", ack_timeout_thread)):
+    for name, thread in (("RX", rx_thread), ("TX", tx_thread), ("TUI", tui_thread), ("ACK Timeout", ack_timeout_thread), ("User Input", user_input_thread)):
         if thread and thread.is_alive():
             try:
                 thread.join(timeout=2.0)
@@ -601,6 +623,7 @@ def stop():
     tx_thread = None
     tui_thread = None    
     ack_timeout_thread = None
+    user_input_thread = None
 
 def _signal_handler(signum, frame):
     """Handle termination signals for graceful shutdown."""
@@ -633,7 +656,7 @@ def _cleanup():
             logging.error(f"Error closing debug plot windows: {e}")
 
     # Drain queues
-    for q in (rx_queue, tx_queue, plot_data_queue):
+    for q in (tx_queue, plot_data_queue, ui_queue, user_input_queue):
         while not q.empty():
             try:
                 q.get_nowait()
@@ -882,8 +905,6 @@ def calculate_expected_payload_symbols(
     logging.debug(f"Calculated expected payload symbols: {conv_output_bits // bps}")
     return conv_output_bits // bps
 
-    
-
 
 
 if __name__ == "__main__":
@@ -964,22 +985,25 @@ if __name__ == "__main__":
 
     # ================= Initialize additional constants =================
     EXPECTED_PAYLOAD_SYMBOLS = calculate_expected_payload_symbols(config)
+    PAYLOAD_SIZE = int(config['datagram']['payload_size'])
 
     # ================== Threading and synchronization primitives ==================
     stop_event: threading.Event = threading.Event()
-    tui_refresh_event: threading.Event = threading.Event()
     rx_thread: threading.Thread = None
     tx_thread: threading.Thread = None
     tui_thread: threading.Thread = None
+    user_input_thread: threading.Thread = None
     ack_timeout_thread: threading.Thread = None 
 
     _cleaned_up = False
     _cleanup_lock = threading.Lock()
-
+   
     # ================== Message queues for inter-thread communication ==================
     tx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for outgoing messages to be transmitted by the TX thread
-    rx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for incoming messages received by the RX thread to be processed by the TUI thread
-    
+    ui_queue: Queue[tuple[Datagram, bool]] = Queue(maxsize=int(config['radio']['queue_size']))  # Queue for user input lines read by the user input thread to be processed by the TUI thread
+    user_input_queue: Queue[str] = Queue(maxsize=64)  # Separate queue for raw user input lines from the user input thread to the TUI thread, to avoid mixing with datagram messages
+    _input_buffer: str = ""  # Buffer for accumulating user input characters until a full line is entered
+
     # List to track pending ACKs with retry counts and datagram info. 
     # (msg_id, retry_count, datagram, last_sent_ms)
     pending_ack: list[tuple[int, int, Datagram, float]] = []  

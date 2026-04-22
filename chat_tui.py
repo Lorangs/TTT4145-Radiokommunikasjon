@@ -13,6 +13,11 @@ from datagram import Datagram, msgType
 
 logger = get_logger(__name__)
 
+class msgStatus:
+    SENT = "S"
+    ACKED = "A"
+    RECEIVED = "R"
+
 class ChatTUI:
     """Simple terminal-based chat UI"""
     
@@ -22,21 +27,33 @@ class ChatTUI:
         Args:
             max_display_messages: Maximum messages to display on screen
         """
-        self.num_display_messages = config['radio']['num_tui_msg']
-        self.messages: list[tuple[bool, Datagram]] = [] # (ACK status, Datagram)
+        self.lock: threading.RLock = threading.RLock()  # Lock to synchronize access to messages list
+        self.num_display_messages: int = config['radio']['num_tui_msg']
+        self.messages: list[tuple[msgStatus, Datagram]] = [] # (msgStatus, Datagram)
+        self.current_input_line: str = ""
         logger.info("Chat TUI initialized.")
       
+    def close(self):
+        """Clean up resources if needed"""
+        logger.info("Closing Chat TUI...")
+        with self.lock:
+            self.messages.clear()
 
     def __del__(self):
-        """Cleanup resources if needed"""
-        for msg in self.messages:
-            del msg  # Explicitly delete messages if needed (not usually necessary in Python)
-        del self.messages
-        logger.info("Chat TUI destroyed.")
+        """Destructor to ensure resources are cleaned up"""
+        try:
+            self.close()
+        except Exception as e:
+            pass
 
     def _clear_screen(self):
         """Clear terminal screen"""
         print("\033[2J\033[H", end="")
+
+    def _draw_input_line(self):
+        """Draw the current input line at the bottom of the screen"""
+        print("-" * 80)
+        print("> " + self.current_input_line, end="", flush=True)
     
     def _print_header(self):
         """Print chat header"""
@@ -48,65 +65,84 @@ class ChatTUI:
     def print_messages(self):
         """Print all messages in the chat display"""
         
-        self.sort_messages()  # Ensure messages are sorted by timestamp before displaying
+        sorted_messages = self.sort_messages()  # Ensure messages are sorted by timestamp before displaying
         display_string = ""
-        for ack_status, dgram in self.messages:
+        for status, dgram in sorted_messages:
             msg_payload = dgram.payload_text(trim_padding=True)
             timestamp_ms = dgram.get_timestamp_ms
             time_str = datetime.fromtimestamp(timestamp_ms / 1000).strftime('%H:%M:%S')
-            status = "R" if ack_status else "S"
             display_string += f"[{time_str}][{status}]\t{msg_payload}\n"
         print(display_string)
 
-    def sort_messages(self):
+    def sort_messages(self) -> list[tuple[msgStatus, Datagram]]:
         """Sort messages by timestamp (oldest first)"""
-        self.messages.sort(key=lambda x: x[1].get_timestamp_ms)
+        with self.lock:
+            sorted_messages = sorted(self.messages, key=lambda x: x[1].get_timestamp_ms)
+        return sorted_messages
 
-    def add_message(self, datagram: Datagram):
-        """Add a message to the chat display
+    def add_message(self, datagram: Datagram, sent_by_us: bool = False):
+        """Add a message to the chat display. Must be used with Lock when modifying messages list.
         Args:
             datagram: Datagram object containing message and metadata
+            sent_by_us: Flag indicating if the message was sent by the user
         """
-        if datagram.get_msg_type == msgType.DATA:
-            message_text = datagram.payload_text(trim_padding=True)
-            timestamp_ms = datagram.get_timestamp_ms  # Convert ms to seconds
-            status = "S"    # S = Sent, R = Received, N = Not Acknowledged
-            display_message = f"[{timestamp_ms // 1000}]\t[{status}]\t{message_text}"
-
+        if sent_by_us:
+            if datagram.get_msg_type != msgType.DATA:
+                return
             
-            self.messages.append((False, datagram))
-            self.delete_old_messages()  # Ensure we don't exceed max display messages
-
-        elif datagram.get_msg_type == msgType.ACK:
-            acked_msg_id = datagram.get_msg_id
-            for i, (ack_status, dgram) in enumerate(self.messages):
-                if dgram.get_msg_id == acked_msg_id:
-                    self.messages[i] = (True, dgram)  # Update ACK status to True
-                    break
+            msg_id = datagram.get_msg_id
+            with self.lock:
+                if any(dgram.get_msg_id == msg_id for _, dgram in self.messages):
+                    return
+                self.messages.append((msgStatus.SENT, datagram))
+                self.delete_old_messages()  # Ensure we don't exceed max display messages
+     
         else:
-            return # Ignore NACK messages for display
+            # Incoming message, add to display as received
+            if datagram.get_msg_type == msgType.DATA:
+                with self.lock:
+                    self.messages.append((msgStatus.RECEIVED, datagram))
+                    self.delete_old_messages()  # Ensure we don't exceed max display messages
+
+            elif datagram.get_msg_type == msgType.ACK:
+                acked_msg_id = datagram.get_msg_id
+                with self.lock:
+                    for i, (ack_status, dgram) in enumerate(self.messages):
+                        if dgram.get_msg_id == acked_msg_id:
+                            self.messages[i] = (msgStatus.ACKED, dgram) 
+                            break
+            else: return
         
     def delete_old_messages(self):
-        """Delete old messages to prevent overflow
+        """Delete old messages to prevent overflow. 
         Args:
             max_messages: Maximum number of messages to keep in display
         """
-        if len(self.messages) > self.num_display_messages:
-            self.sort_messages()  # Ensure messages are sorted by timestamp before deleting
-            self.messages = self.messages[-self.num_display_messages:]
+        with self.lock:
+            if len(self.messages) > self.num_display_messages:
+                sorted_messages = self.sort_messages()  # Ensure messages are sorted by timestamp before deleting
+                self.messages = sorted_messages[-self.num_display_messages:]
+
+    def set_current_input(self, text: str):
+        """update the current typedd input line."""
+        with self.lock:
+            self.current_input_line = text
 
     def render_screen(self):
         """Render the chat screen with current messages"""
         self._clear_screen()
         self._print_header()
         self.print_messages()
-        print('-' * 80)
-        print("> ", end="", flush=True)  # Prompt for user input
+        self._draw_input_line()
 
 if __name__ == "__main__":
     # Example usage of ChatTUI
-   
-    chat_ui = ChatTUI()
+    demo_config = {
+        'radio': {
+            'num_tui_msg': 100
+        }
+    }
+    chat_ui = ChatTUI(demo_config)
 
     import numpy as np
 

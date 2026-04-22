@@ -1,6 +1,7 @@
 # Logging configuration
 logging:
   level: ERROR  # Logging level: DEBUG, INFO, WARNING, ERROR
+  log_messages: true  # Whether to log messages (datagrams) in addition to events
 
 # Radio hardware settings
 radio:
