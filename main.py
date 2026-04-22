@@ -73,7 +73,9 @@ def _ack_received(msg_id: int) -> None:
     with pending_lock:
         idx = _find_pending_index(msg_id)
         if idx is not None:
-            pending_ack.pop(idx)
+
+            ack_dgram = pending_ack.pop(idx)[2]
+
 
 
 def _retransmit_oldest_pending() -> None:
@@ -299,6 +301,14 @@ def _rx_loop():
                 logging.info(f"Received ACK for msg_ID: {received_datagram.get_msg_id}")
                 if PENDING_TRACKING_ENABLED:
                     _ack_received(int(received_datagram.get_msg_id))
+
+                # Put the ack in rx_queue for tui to process the ack as well.
+                try:
+                    rx_queue.put(received_datagram)
+                except Full:
+                    logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
+                    continue
+
             
 
             # retransmit the previous sent message.
@@ -417,7 +427,7 @@ def _tui_loop():
                 while not rx_queue.empty():
                     try:
                         received_datagram: Datagram = rx_queue.get_nowait()
-                        tui.add_message(received_datagram, received=True)
+                        tui.add_message(received_datagram)
                         logging.debug(f"TUI processed received datagram ID: {received_datagram.get_msg_id}")
                     except Empty:
                         break  # No more messages to process
