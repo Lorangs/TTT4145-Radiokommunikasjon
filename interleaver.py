@@ -48,10 +48,7 @@ class Interleaver:
 
     The public API accepts and returns 1D ``np.uint8`` arrays so it matches the
     current branch's packed byte/bit pipeline:
-
-        RS encode -> interleave -> scrambler -> convolutional encode
-        convolutional decode -> descramble -> deinterleave -> RS decode
-    """
+"""
 
     def __init__(self, config: dict):
         coding_cfg = config.get("coding", {})

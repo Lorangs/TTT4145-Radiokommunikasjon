@@ -10,9 +10,9 @@ radio:
 
 # Link control settings
 link_control:
-  enable_ack: True  # Enable ACK mechanism
-  enable_nack: false  # Enable NACK mechanism
-  enable_retransmit: True  # Enable packet retransmission
+  enable_ack: True          # Enable ACK mechanism
+  enable_nack: False        # Enable NACK mechanism
+  enable_retransmit: True   # Enable packet retransmission
   track_pending_data: True  # Track pending data
 
 # Datagram format parameters
@@ -43,16 +43,16 @@ transmitter:
 
 # Receiver settings
 receiver:
-  rx_gain_dB: 20  # RX gain in dB, range: 0 to 73 dB
+  rx_gain_dB: 25  # RX gain in dB, range: 0 to 73 dB
   rx_bandwidth: 1e6  # RX bandwidth in Hz
   rx_carrier: 867.5e6  # RX local oscillator (carrier frequency) in Hz
-  gain_mode: fast_attack  # Gain mode: "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
+  gain_mode: manual  # Gain mode: "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
   buffer_size: 32768  # RX buffer size
 
 # Modulation settings
 modulation:
-  type: QPSK          # Modulation type
-  order: 4            # Modulation order
+  type: QPSK          # Modulation type, BPSK or QPSK, QAM not supported
+  order: 4            # Modulation order, 2 for BPSK 
   symbol_rate: 125e3  # Symbol rate in symbols/s
   samples_per_symbol: 8  # Samples per symbol
   sample_rate: 1e6  # Sample rate in Hz
