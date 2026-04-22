@@ -107,11 +107,10 @@ class Datagram():
     def as_ack(
         cls, 
         msg_id: np.uint8,
-        timestamp_ms: np.uint32 | None = None, 
-        payload: npt.NDArray[np.uint8] = np.array([], dtype=np.uint8)
+        timestamp_ms: np.uint32 | None = None
     ) -> 'Datagram':
         """Create an ACK datagram for a given message ID."""
-        return cls(msg_id=msg_id, msg_type=msgType.ACK, timestamp_ms=timestamp_ms, payload=payload)
+        return cls(msg_id=msg_id, msg_type=msgType.ACK, timestamp_ms=timestamp_ms)
 
     @classmethod
     def as_nack(cls) -> 'Datagram':

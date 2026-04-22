@@ -5,7 +5,8 @@ logging:
 # Radio hardware settings
 radio:
   ip_address: ip:192.168.0.151  # IP address of SDR radio
-  queue_size: 1000  # Max size of RX and TX queues. Also determines the max number of messages stored for display in the TUI.
+  queue_size: 1000  # Max size of RX and TX queues.
+  num_tui_msg: 100  # Number of messages to display in the TUI.
   debug_mode: false  # If True, the system will run in debug mode with live plotting of signals.
 
 # Link control settings
