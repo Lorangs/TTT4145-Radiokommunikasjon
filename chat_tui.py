@@ -4,11 +4,14 @@ Simple terminal-based chat interface with message status display
 """
 
 import sys
+import threading
 from datetime import datetime
 from collections import deque
-import logging
+from project_logger import get_logger
 from datagram import Datagram, msgType
 
+
+logger = get_logger(__name__)
 
 class ChatTUI:
     """Simple terminal-based chat UI"""
@@ -19,15 +22,17 @@ class ChatTUI:
         Args:
             max_display_messages: Maximum messages to display on screen
         """
-        self.messages: deque[str] = deque(maxlen=int(config['radio']['queue_size']) ) # Store recent messages for display
-        logging.info("Chat TUI initialized.")
+        self.num_display_messages = config['radio']['num_tui_msg']
+        self.messages: list[tuple[bool, Datagram]] = [] # (ACK status, Datagram)
+        logger.info("Chat TUI initialized.")
+      
 
     def __del__(self):
         """Cleanup resources if needed"""
         for msg in self.messages:
             del msg  # Explicitly delete messages if needed (not usually necessary in Python)
         del self.messages
-        logging.info("Chat TUI destroyed.")
+        logger.info("Chat TUI destroyed.")
 
     def _clear_screen(self):
         """Clear terminal screen"""
@@ -40,75 +45,112 @@ class ChatTUI:
         print("=" * 80)
         print("Commands: /quit to exit.")
 
-    def _update_local_message_status(self, msg_id, new_status: str) -> bool:
-        message_id_token = f"[ID:{int(msg_id)}]"
-        for index, message in enumerate(self.messages):
-            if message_id_token not in message or "[IN]" in message:
-                continue
+    def print_messages(self):
+        """Print all messages in the chat display"""
+        
+        self.sort_messages()  # Ensure messages are sorted by timestamp before displaying
+        display_string = ""
+        for ack_status, dgram in self.messages:
+            msg_payload = dgram.payload_text(trim_padding=True)
+            timestamp_ms = dgram.get_timestamp_ms
+            time_str = datetime.fromtimestamp(timestamp_ms / 1000).strftime('%H:%M:%S')
+            status = "R" if ack_status else "S"
+            display_string += f"[{time_str}][{status}]\t{msg_payload}\n"
+        print(display_string)
 
-            updated_message = message
-            for old_status in ("[S]", "[R]", "[F]"):
-                if old_status in updated_message:
-                    updated_message = updated_message.replace(old_status, new_status, 1)
-                    self.messages[index] = updated_message
-                    return True
-        return False
+    def sort_messages(self):
+        """Sort messages by timestamp (oldest first)"""
+        self.messages.sort(key=lambda x: x[1].get_timestamp_ms)
 
-    def mark_acknowledged(self, msg_id) -> bool:
-        return self._update_local_message_status(msg_id, "[R]")
-
-    def mark_failed(self, msg_id) -> bool:
-        return self._update_local_message_status(msg_id, "[F]")
-
-    def add_message(self, datagram: Datagram, is_local: bool = True):
+    def add_message(self, datagram: Datagram):
         """Add a message to the chat display
         Args:
             datagram: Datagram object containing message and metadata
         """
         if datagram.get_msg_type == msgType.DATA:
             message_text = datagram.payload_text(trim_padding=True)
-            if len(message_text) > 60:
-                message_text = message_text[:60] + "..."
-            else:
-                message_text = message_text
+            timestamp_ms = datagram.get_timestamp_ms  # Convert ms to seconds
+            status = "S"    # S = Sent, R = Received, N = Not Acknowledged
+            display_message = f"[{timestamp_ms // 1000}]\t[{status}]\t{message_text}"
 
-            timestamp = datetime.now().strftime("%H:%M:%S")
-            direction_status = "[S]" if is_local else "[IN]"
-            display_message = (
-                f"[{timestamp}][ID:{int(datagram.get_msg_id)}]{direction_status}\t{message_text}"
-            )
-            self.messages.append(display_message)
+            
+            self.messages.append((False, datagram))
+            self.delete_old_messages()  # Ensure we don't exceed max display messages
 
+        elif datagram.get_msg_type == msgType.ACK:
+            acked_msg_id = datagram.get_msg_id
+            for i, (ack_status, dgram) in enumerate(self.messages):
+                if dgram.get_msg_id == acked_msg_id:
+                    self.messages[i] = (True, dgram)  # Update ACK status to True
+                    break
         else:
-            self.mark_acknowledged(datagram.get_msg_id)
+            return # Ignore NACK messages for display
+        
+    def delete_old_messages(self):
+        """Delete old messages to prevent overflow
+        Args:
+            max_messages: Maximum number of messages to keep in display
+        """
+        if len(self.messages) > self.num_display_messages:
+            self.sort_messages()  # Ensure messages are sorted by timestamp before deleting
+            self.messages = self.messages[-self.num_display_messages:]
 
-    def render_screen(self, current_input: str = ""):
+    def render_screen(self):
         """Render the chat screen with current messages"""
         self._clear_screen()
         self._print_header()
-        for msg in self.messages:
-            print(msg)
+        self.print_messages()
         print('-' * 80)
-        print(f"> {current_input}", end="", flush=True)  # Prompt for user input
+        print("> ", end="", flush=True)  # Prompt for user input
 
 if __name__ == "__main__":
     # Example usage of ChatTUI
-    config = {"radio": {"queue_size": 32}}
-    chat_ui = ChatTUI(config)
+   
+    chat_ui = ChatTUI()
 
     import numpy as np
 
-    msgID = []
+    # Fixed base time for reproducible output
+    base_dt = datetime(2026, 4, 22, 0, 0, 0)
+    base_ms = int(base_dt.timestamp() * 1000)
+
+    # Intentionally out-of-order by timestamp offset (seconds)
+    # (msg_id, offset_sec, text)
+    data_messages = []
+    for i in range(130):
+        msg_id = i + 1  # Unique message ID
+        offset_s = i    # second the message was created
+        payload = f"Message {i}\t+{offset_s}s"
+        data_messages.append((msg_id, offset_s, payload))
+
+
+    # Add ACKs out of order too (optional)
+    ack_order = np.random.permutation([msg_id for msg_id, _, _ in data_messages])  # Random ACK order
+    ack_order = ack_order[:100]  # ACK only the first 100 messages for demonstration
     
-    # Simulate sending messages
-    for i in range(5):
-        payload = f"Hello, this is message {i}"
-        datagram = Datagram.as_string(payload)
-        msgID.append(datagram.get_msg_id)  # Store message ID for later reference
-        chat_ui.add_message(datagram, is_local=True)
-        chat_ui.render_screen()
+    # Add DATA datagrams in this out-of-order sequence
+    while data_messages:
+        random_idx = np.random.randint(0, len(data_messages))   
+        msg_id, offset_s, text = data_messages.pop(random_idx) 
+        ts_ms = base_ms + offset_s * 1000
+        dgram = Datagram.as_string(
+            text=text,
+            timestamp_ms=ts_ms,
+            msg_id=msg_id,
+            msg_type=msgType.DATA
+        )
+        chat_ui.add_message(dgram)
+
+    chat_ui.render_screen()  # Initial render with out-of-order messages
 
 
-    ack_datagram = Datagram.as_ack(msg_id=msgID[2])  # Create ACK for the third message
-    chat_ui.add_message(ack_datagram)
+    for msg_id in ack_order:
+        ack_ts_ms = base_ms + 60 + msg_id  # later than all data
+        ack = Datagram.as_ack(msg_id=msg_id, timestamp_ms=ack_ts_ms)
+        chat_ui.add_message(ack)
+
     chat_ui.render_screen()
+
+
+
+

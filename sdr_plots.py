@@ -1083,18 +1083,19 @@ class LiveSDRPlotter(QMainWindow):
         logging.info("Closing LiveSDRPlotter...")
         
         # Stop worker
-        if hasattr(self, 'worker'):
-            self.worker.stop()
+        if hasattr(self, "_closing") and self._closing:
+            return
+        self._closing = True
         
         # Stop thread
+        if hasattr(self, 'worker'):
+            self.worker.stop()
+
         if hasattr(self, 'worker_thread') and self.worker_thread.isRunning():
             self.worker_thread.quit()
-            self.worker_thread.wait(2000)  # Wait up to 2 seconds
-        
-        # Close window
-        self.close()
-        
+            self.worker_thread.wait(2000)
         logging.info("LiveSDRPlotter closed successfully")
+    
     
     def closeEvent(self, event):
         """Handle window close event."""

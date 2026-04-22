@@ -11,18 +11,22 @@ import io
 
 from reedsolo import RSCodec, ReedSolomonError
 import numpy as np
+import numpy.typing as npt
+from project_logger import get_logger
+
+logger = get_logger(__name__)
 
 class FCCodec:
     def __init__(self, config: dict):
         self.num_ecc = int(config['coding']['rs_num_ecc'])
-        self.rsc = RSCodec(self.num_ecc * 2)  # Initialize Reed-Solomon codec with enough ECC symbols to correct rs_num_ecc errors
+        self.rsc = RSCodec(self.num_ecc)  # Initialize Reed-Solomon codec with enough ECC symbols to correct rs_num_ecc errors
         self.last_decode_error = ""
 
-    def encode(self, data: np.ndarray) -> np.ndarray:
+    def encode(self, data: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         """Encode data using Reed-Solomon code."""
         return np.array(self.rsc.encode(data.tobytes()), dtype=np.uint8)
 
-    def rs_decode(self, encoded_data: np.ndarray) -> np.ndarray:
+    def decode(self, encoded_data: npt.NDArray[np.uint8]) -> npt.NDArray[np.uint8]:
         """Decode data using Reed-Solomon code, correcting errors if possible."""
         try:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
@@ -30,13 +34,18 @@ class FCCodec:
             self.last_decode_error = ""
             return np.array(decoded_msg, dtype=np.uint8)
         except ReedSolomonError as e:
-            self.last_decode_error = str(e)
+            #logger.warning("Reed-Solomon decoding failed: %s", e)
             raise ValueError(f"Reed-Solomon decoding failed: {e}")
         except Exception as e:
+            logger.error("Unexpected error during decoding: %s", e)
             raise RuntimeError(f"Unexpected error during decoding: {e}")
 
 
 
+MAP_ECC_TO_ADDITIONAL_BYTES = {
+    8: 16,   
+    32: 128, # 32 ECC symbols can correct up to 128 byte errors
+}
 
 if __name__ == "__main__":
     from datagram import Datagram, msgType

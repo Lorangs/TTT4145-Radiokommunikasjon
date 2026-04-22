@@ -5,36 +5,56 @@ Gold-code detector and framing helper.
 
 from __future__ import annotations
 
+from project_logger import get_logger
+logger = get_logger(__name__)
 import logging
 
 import numpy as np
 
 from gold_code import get_gold_code_symbols
-from modulation import modulation_rotations, nearest_constellation_symbols
+from modulation import modulation_rotations
 from modulation import normalize_config_modulation_name
 
 
 class GoldCodeDetector:
     def __init__(self, config: dict):
-        modulation_type = normalize_config_modulation_name(config)
+        self.modulation_type = normalize_config_modulation_name(config)
         gold_config = config["gold_sequence"]
         code_length = int(gold_config["code_length"])
         code_index = int(gold_config.get("code_index", 0))
-        header_repeat_count = int(gold_config.get("header_repeat_count", 1))
-        header_repeat_count = max(1, header_repeat_count)
 
-        self.base_gold_symbols = get_gold_code_symbols(
-            modulation_type=modulation_type,
+        gold_symbols = get_gold_code_symbols(
+            modulation_type=self.modulation_type,
             code_length=code_length,
             code_index=code_index,
         ).astype(np.complex64, copy=False)
-        self.gold_symbols = np.tile(
-            self.base_gold_symbols,
-            header_repeat_count,
-        ).astype(np.complex64, copy=False)
+
+        rotation_values = np.asarray(
+            modulation_rotations(self.modulation_type),
+            dtype=np.complex64,
+        )
+        if self.modulation_type.upper() == "BPSK":
+            self.rotation_factors = {
+                0: rotation_values[0],
+                180: rotation_values[1],
+            }
+        elif self.modulation_type.upper() == "QPSK":
+            self.rotation_factors = {
+                0: rotation_values[0],
+                90: rotation_values[1],
+                180: rotation_values[2],
+                270: rotation_values[3],
+            }
+        else:
+            raise ValueError(f"Unsupported modulation type for Gold code: {self.modulation_type}")
+
+        self.gold_symbols = {
+            rotation: gold_symbols * factor
+            for rotation, factor in self.rotation_factors.items()
+        }
+
         self.code_length = code_length
         self.code_index = code_index
-        self.header_repeat_count = header_repeat_count
 
         threshold = gold_config.get(
             "correlation_scale_factor_threshold",
@@ -46,37 +66,97 @@ class GoldCodeDetector:
                 "'correlation_scale_factor_threshold' or 'correlation_threshold'."
             )
         self.correlation_scale_factor_threshold = float(threshold)
+        self.ref_energy = float(np.vdot(self.gold_symbols.get(0), self.gold_symbols.get(0)).real)
+
 
     def add_gold_symbols(self, signal: np.ndarray) -> np.ndarray:
-        """Add the selected Gold code to the beginning of the symbol stream."""
-        return np.concatenate((self.gold_symbols, signal))
+        """Add the selected Gold code to the beginning and end of the symbol stream."""
+        return np.concatenate((self.gold_symbols.get(0), signal, self.gold_symbols.get(0)))
 
-    def remove_gold_symbols(self, signal: np.ndarray, start_index: int) -> np.ndarray:
-        """Remove the Gold code from the symbol stream starting at start_index."""
-        if start_index < 0 or start_index + len(self.gold_symbols) > len(signal):
-            logging.warning("Invalid start index for removing Gold code.")
-            return signal
-        return signal[start_index + len(self.gold_symbols) :]
+    def remove_gold_symbols(
+        self,
+        signal: np.ndarray,
+        start_index: int,
+        payload_symbol_count: int,
+    ) -> np.ndarray:
+        """
+        Remove the leading Gold sequence and return exactly the payload symbols.
+
+        Frame layout:
+            [leading Gold][payload][trailing Gold]
+
+        Args:
+            signal: Symbol-rate complex stream
+            start_index: Detected start index of the leading Gold sequence
+            payload_symbol_count: Expected number of payload symbols
+
+        Returns:
+            Payload-only symbol stream
+
+        Raises:
+            ValueError if the requested payload region does not fit inside the buffer.
+        """
+        received = np.asarray(signal).astype(np.complex64, copy=False)
+
+        gold_len = int(self.gold_symbols[0].size)
+        payload_start = int(start_index + gold_len)
+        payload_stop = int(payload_start + payload_symbol_count)
+
+        if start_index < 0 or (start_index + gold_len) > received.size:
+            raise ValueError("Invalid leading Gold index.")
+
+        if payload_stop > received.size:
+            raise ValueError(
+                f"Buffer too short for payload extraction: "
+                f"payload_stop={payload_stop}, available={received.size}"
+            )
+        return received[payload_start:payload_stop]
+
 
     def normalized_correlation(self, received_signal: np.ndarray) -> np.ndarray:
-        reference = self.gold_symbols.astype(np.complex64, copy=False)
+        """Compute the normalized correlation between the received signal and the Gold code."""
         received = np.asarray(received_signal).astype(np.complex64, copy=False)
 
-        if received.size < reference.size:
+        if received.size < self.gold_symbols.get(0).size:
             return np.array([], dtype=np.float32)
 
-        raw = np.correlate(received, reference, mode="valid")
-        ref_energy = float(np.vdot(reference, reference).real)
+        raw = np.correlate(received, self.gold_symbols.get(0), mode="valid")
+
         rx_power = np.abs(received) ** 2
         window_energy = np.convolve(
             rx_power,
-            np.ones(reference.size, dtype=np.float32),
+            np.ones(self.gold_symbols.get(0).size, dtype=np.float32),
             mode="valid",
         )
+        denom = np.sqrt(np.maximum(self.ref_energy * window_energy, 1e-12))
+        return (np.abs(raw) / denom).astype(np.float32, copy=False)
+    
+    def _normalized_correlation_with_template(
+        self,
+        received_signal: np.ndarray,
+        template: np.ndarray,
+    ) -> np.ndarray:
+        received = np.asarray(received_signal).astype(np.complex64, copy=False)
+        template = np.asarray(template).astype(np.complex64, copy=False)
+
+        if received.size < template.size:
+            return np.array([], dtype=np.float32)
+
+        raw = np.correlate(received, template, mode="valid")
+        rx_power = np.abs(received) ** 2
+        window_energy = np.convolve(
+            rx_power,
+            np.ones(template.size, dtype=np.float32),
+            mode="valid",
+        )
+        ref_energy = float(np.vdot(template, template).real)
         denom = np.sqrt(np.maximum(ref_energy * window_energy, 1e-12))
+        
         return (np.abs(raw) / denom).astype(np.float32, copy=False)
 
+
     def detect(self, received_signal: np.ndarray) -> int | None:
+        """Detect the presence of the leading and trailing Gold code in the received signal and return the index of the first one, or None if no match exceeds the threshold."""
         scores = self.normalized_correlation(received_signal)
         if scores.size == 0:
             return None
@@ -87,144 +167,183 @@ class GoldCodeDetector:
             return None
         return peak_index
 
-    def detect_with_score(self, received_signal: np.ndarray) -> tuple[int | None, float]:
-        scores = self.normalized_correlation(received_signal)
-        if scores.size == 0:
-            return None, 0.0
+    def rotate_signal(self, signal: np.ndarray, rotation: int) -> np.ndarray:
+        """Rotate the signal by the specified angle (in degrees) if it's a known rotation for the modulation type."""
+        try:
+            factor = self.rotation_factors[int(rotation)]
+        except KeyError as exc:
+            raise ValueError(f"Unsupported rotation {rotation} for {self.modulation_type}.") from exc
+        return signal * factor
 
-        peak_index = int(np.argmax(scores))
-        peak_value = float(scores[peak_index])
-        if peak_value < self.correlation_scale_factor_threshold:
-            return None, peak_value
-        return peak_index, peak_value
-
-    def detect_with_score_in_window(
+    def estimate_rotation_from_gold(
         self,
-        received_signal: np.ndarray,
+        received_symbols: np.ndarray,
         start_index: int,
-        stop_index: int,
-    ) -> tuple[int | None, float]:
+    ) -> int:
+        """
+        Estimate the constellation rotation from the detected leading Gold code.
+
+        The detected Gold index tells us where the known header starts. At that
+        position we compute the complex correlation against the unrotated Gold
+        reference, take its phase, and snap the required correction to the
+        nearest allowed constellation rotation.
+
+        Returns:
+            The rotation, in degrees, to apply to the received symbol stream.
+        """
+        received = np.asarray(received_symbols).astype(np.complex64, copy=False)
+
+        gold_len = int(self.gold_symbols[0].size)
+        payload_start = int(start_index)
+        payload_stop = int(payload_start + gold_len)
+        if payload_start < 0 or payload_stop > received.size:
+            raise ValueError("Detected Gold index does not fit inside received buffer.")
+
+        received_gold = received[payload_start:payload_stop]
+        reference_gold = self.gold_symbols[0]
+        correlation = np.vdot(reference_gold, received_gold)
+        if not np.isfinite(correlation.real) or not np.isfinite(correlation.imag):
+            raise ValueError("Gold correlation produced a non-finite phase estimate.")
+        if np.abs(correlation) <= 1e-12:
+            raise ValueError("Gold correlation magnitude too small to estimate rotation.")
+
+        target_correction = np.exp(-1j * np.angle(correlation))
+        best_rotation = min(
+            self.rotation_factors,
+            key=lambda rotation: abs(
+                np.angle(target_correction * np.conj(self.rotation_factors[rotation]))
+            ),
+        )
+        return int(best_rotation)
+
+    def detect_with_score(
+        self, 
+        received_signal: np.ndarray
+    ) -> tuple[tuple[int, float] | None, tuple[int, float] | None]:
+        """
+        Return two strongest peaks (leading, trailing), or (None, None).
+        Each peak is (index, score).
+        """
         scores = self.normalized_correlation(received_signal)
+        p1, p2 = self._top_two_peaks_min_separation(
+            scores=scores,
+            min_separation=self.code_length,
+            threshold=self.correlation_scale_factor_threshold,
+        )
+        if p1 is None or p2 is None:
+            return None, None
+
+        # time order
+        if p1[0] <= p2[0]:
+            return p1, p2
+        return p2, p1
+
+    @staticmethod
+    def _top_two_peaks_min_separation(
+        scores: np.ndarray,
+        min_separation: int,
+        threshold: float,
+    ) -> tuple[tuple[int, float] | None, tuple[int, float] | None]:
+        """Return two strongest peaks >= threshold with |i-j| >= min_separation."""
         if scores.size == 0:
-            return None, 0.0
+            return None, None
 
-        start = max(0, int(start_index))
-        stop = min(int(stop_index), int(scores.size))
-        if stop <= start:
-            return None, 0.0
+        order = np.argsort(scores)[::-1]  # strongest first
+        first: tuple[int, float] | None = None
+        second: tuple[int, float] | None = None
 
-        window_scores = scores[start:stop]
-        local_offset = int(np.argmax(window_scores))
-        peak_index = start + local_offset
-        peak_value = float(window_scores[local_offset])
-        if peak_value < self.correlation_scale_factor_threshold:
-            return None, peak_value
-        return peak_index, peak_value
+        for idx in order:
+            i = int(idx)
+            v = float(scores[i])
+            if v < threshold:
+                break
 
+            if first is None:
+                first = (i, v)
+                continue
 
-def detect_gold_with_rotation(
-    received_symbols: np.ndarray,
-    gold_detector: GoldCodeDetector,
-    modulation_type: str,
-    expected_index: int | None = None,
-    search_radius: int | None = None,
-) -> tuple[int | None, float, complex, np.ndarray]:
-    best_index = None
-    best_peak = -1.0
-    best_rotation = 1 + 0j
-    best_decisions = np.array([], dtype=np.complex64)
+            if abs(i - first[0]) >= int(min_separation):
+                second = (i, v)
+                break
 
-    for rotation in modulation_rotations(modulation_type):
-        rotated = received_symbols * rotation
-        decisions = nearest_constellation_symbols(rotated, modulation_type)
-        if expected_index is not None and search_radius is not None:
-            start = max(0, int(expected_index) - int(search_radius))
-            stop = int(expected_index) + int(search_radius) + 1
-            index, peak = gold_detector.detect_with_score_in_window(decisions, start, stop)
-        else:
-            index, peak = gold_detector.detect_with_score(decisions)
-        if peak > best_peak:
-            best_peak = peak
-            best_index = index
-            best_rotation = rotation
-            best_decisions = decisions
-
-    return best_index, best_peak, best_rotation, best_decisions
+        return first, second
 
 
-def rank_gold_candidates(
-    symbol_stream: np.ndarray,
-    gold_detector: GoldCodeDetector,
-    modulation_type: str,
-    expected_index: int | None = None,
-    search_radius: int | None = None,
-    top_k: int = 5,
-) -> list[dict]:
-    received = np.asarray(symbol_stream).astype(np.complex64, copy=False)
-    candidates: list[dict] = []
+    def detect_with_rotation(
+        self,
+        received_symbols: np.ndarray,
+        payload_symbol_count: int,
+    ) -> tuple[int | None, int]:
+        """
+        Detect the earliest Gold-code match that can fit a full frame.
 
-    for rotation in modulation_rotations(modulation_type):
-        rotated = received * rotation
-        decisions = nearest_constellation_symbols(rotated, modulation_type)
-        scores = gold_detector.normalized_correlation(decisions)
-        if scores.size == 0:
-            continue
+        Returns:
+            (best_index, best_rotation)
 
-        if expected_index is not None and search_radius is not None:
-            start = max(0, int(expected_index) - int(search_radius))
-            stop = min(int(scores.size), int(expected_index) + int(search_radius) + 1)
-        else:
-            start = 0
-            stop = int(scores.size)
+        The candidate search scans all allowed rotations, keeps peaks above the
+        configured correlation threshold, filters out peaks that cannot be the
+        leading Gold sequence of a complete frame, and then prefers the
+        earliest valid candidate. This avoids locking onto the trailing Gold
+        sequence when both frame edges correlate strongly.
 
-        if stop <= start:
-            continue
+        If no valid correlation peak is found, returns (None, 0).
+        """
+        received = np.asarray(received_symbols).astype(np.complex64, copy=False)
 
-        local_scores = scores[start:stop]
-        unique_indices: set[int] = set()
+        candidates: list[tuple[int, int, float]] = []
 
-        if expected_index is not None and start <= int(expected_index) < stop:
-            unique_indices.add(int(expected_index) - start)
+        for rotation, template in self.gold_symbols.items():
+            scores = self._normalized_correlation_with_template(received, template)
+            if scores.size == 0:
+                continue
 
-        top_count = min(int(max(1, top_k)), int(local_scores.size))
-        sorted_local = np.argsort(local_scores)[-top_count:][::-1]
-        for local_idx in sorted_local.tolist():
-            unique_indices.add(int(local_idx))
+            order = np.argsort(scores)[::-1]
+            for idx in order:
+                peak = float(scores[idx])
+                if peak < self.correlation_scale_factor_threshold:
+                    break
 
-        for local_idx in sorted(unique_indices):
-            index = start + int(local_idx)
-            peak = float(local_scores[local_idx])
-            candidates.append(
-                {
-                    "phase": 0,
-                    "index": int(index),
-                    "peak": peak,
-                    "rotation": rotation,
-                    "decisions": decisions,
-                }
-            )
+                start_index = int(idx)
+                if not self.candidate_fits_frame(
+                    signal_length=received.size,
+                    start_index=start_index,
+                    payload_symbol_count=payload_symbol_count,
+                    require_trailing_gold=True,
+                ):
+                    continue
 
-    if not candidates:
-        return [
-            {
-                "phase": 0,
-                "index": None,
-                "peak": 0.0,
-                "rotation": 1 + 0j,
-                "decisions": np.array([], dtype=np.complex64),
-            }
-        ]
+                candidates.append((start_index, rotation, peak))
 
-    def sort_key(candidate: dict) -> tuple[float, float, float]:
-        if expected_index is None:
-            return (-float(candidate["peak"]), 0.0, 0.0)
-        distance = abs(int(candidate["index"]) - int(expected_index))
-        exact_bias = 0 if distance == 0 else 1
-        return (float(exact_bias), float(distance), -float(candidate["peak"]))
+        if not candidates:
+            return None, 0
 
-    candidates.sort(key=sort_key)
-    return candidates[: max(1, int(top_k))]
+        candidates.sort(key=lambda item: (item[0], -item[2]))
+        best_index, best_rotation, _ = candidates[0]
+        return best_index, best_rotation
 
+
+      
+    def candidate_fits_frame(
+        self,
+        signal_length: int,
+        start_index: int,
+        payload_symbol_count: int,
+        require_trailing_gold: bool = False,
+    ) -> bool:
+        """
+        Check whether a detected Gold position can fit a full frame.
+
+        Frame layout:
+            [leading Gold][payload][trailing Gold]
+        """
+        gold_len = int(self.gold_symbols[0].size)
+
+        required_symbols = gold_len + payload_symbol_count
+        if require_trailing_gold:
+            required_symbols += gold_len
+        return 0 <= start_index <= (signal_length - required_symbols)
+
+    
 
 if __name__ == "__main__":
     from copy import deepcopy
