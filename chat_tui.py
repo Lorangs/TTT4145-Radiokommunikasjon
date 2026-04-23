@@ -13,6 +13,11 @@ from datagram import Datagram, msgType
 
 logger = get_logger(__name__)
 
+class msgStatus:
+    SENT = "S"
+    RECEIVED = "R"
+    ACKED = "A"
+
 class ChatTUI:
     """Simple terminal-based chat UI"""
     
@@ -23,7 +28,7 @@ class ChatTUI:
             max_display_messages: Maximum messages to display on screen
         """
         self.num_display_messages = config['radio']['num_tui_msg']
-        self.messages: list[tuple[bool, Datagram]] = [] # (ACK status, Datagram)
+        self.messages: list[tuple[msgStatus, Datagram]] = [] # (ACK status, Datagram)
         logger.info("Chat TUI initialized.")
       
 
@@ -52,39 +57,37 @@ class ChatTUI:
         display_string = ""
         for ack_status, dgram in self.messages:
             msg_payload = dgram.payload_text(trim_padding=True)
-            timestamp_ms = dgram.get_timestamp_ms
-            time_str = datetime.fromtimestamp(timestamp_ms / 1000).strftime('%H:%M:%S')
-            status = "R" if ack_status else "S"
-            display_string += f"[{time_str}][{status}]\t{msg_payload}\n"
+            time_str = datetime.fromtimestamp(dgram.get_timestamp_ms / 1000).strftime('%H:%M:%S')
+            display_string += f"\n[{time_str}][{ack_status}]\t{msg_payload}"
         print(display_string)
 
     def sort_messages(self):
         """Sort messages by timestamp (oldest first)"""
         self.messages.sort(key=lambda x: x[1].get_timestamp_ms)
 
-    def add_message(self, datagram: Datagram):
+    def add_message(self, datagram: Datagram, sent_by_self: bool = False):
         """Add a message to the chat display
         Args:
             datagram: Datagram object containing message and metadata
+            sent_by_self: Whether the message was sent by the user
         """
-        if datagram.get_msg_type == msgType.DATA:
-            message_text = datagram.payload_text(trim_padding=True)
-            timestamp_ms = datagram.get_timestamp_ms  # Convert ms to seconds
-            status = "S"    # S = Sent, R = Received, N = Not Acknowledged
-            display_message = f"[{timestamp_ms // 1000}]\t[{status}]\t{message_text}"
+        if sent_by_self:
+            if datagram.get_msg_type == msgType.DATA:
+                self.messages.append((msgStatus.SENT, datagram))
+                self.delete_old_messages()  # Ensure we don't exceed max display messages
 
-            
-            self.messages.append((False, datagram))
-            self.delete_old_messages()  # Ensure we don't exceed max display messages
-
-        elif datagram.get_msg_type == msgType.ACK:
-            acked_msg_id = datagram.get_msg_id
-            for i, (ack_status, dgram) in enumerate(self.messages):
-                if dgram.get_msg_id == acked_msg_id:
-                    self.messages[i] = (True, dgram)  # Update ACK status to True
-                    break
         else:
-            return # Ignore NACK messages for display
+            if datagram.get_msg_type == msgType.ACK:
+                acked_msg_id = datagram.get_msg_id
+                for i, (ack_status, dgram) in enumerate(self.messages):
+                    if dgram.get_msg_id == acked_msg_id:
+                        self.messages[i] = (msgStatus.ACKED, dgram)  # Update ACK status to True
+                        break
+            elif datagram.get_msg_type == msgType.DATA:
+                self.messages.append((msgStatus.RECEIVED, datagram))
+                self.delete_old_messages()  # Ensure we don't exceed max display messages
+            else:
+                return # Ignore NACK messages for display
         
     def delete_old_messages(self):
         """Delete old messages to prevent overflow

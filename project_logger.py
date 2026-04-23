@@ -116,7 +116,7 @@ def configure_project_logging(
     for noisy_name in _NOISY_LOGGERS:
         logging.getLogger(noisy_name).setLevel(logging.WARNING)
 
-    logging.info("--- New %s session started ---", session_name)
+    logging.info("\n\n--- New %s session started ---", session_name)
     if resolved_log_path is not None:
         logging.info(
             "Logging configured: level=%s, file=%s",

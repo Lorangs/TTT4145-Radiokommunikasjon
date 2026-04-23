@@ -280,25 +280,29 @@ def _rx_loop():
                 stem=f"rx_payload_symbol_eye_q_after_selected_rotation_{timestamp}",
             )
 
-            tui_refresh_event.set()  # Signal TUI to refresh display
-
             if received_datagram.get_msg_type == msgType.DATA:
                 logging.info(f"Received datagram: {received_datagram}")
-                try:
-                    rx_queue.put(received_datagram)
-                except Full:
-                    logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
-                    continue
-
                 if ACK_ENABLED:
                     ack_datagram = Datagram.as_ack(msg_id=received_datagram.get_msg_id)
                     queue_datagram(ack_datagram)
+                try:
+                    rx_queue.put(received_datagram)
+                    tui_refresh_event.set()  # Signal TUI to refresh display
+                except Full:
+                    logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
+                    continue
       
             # mark message as acknowledged if ACK received, so it won't be retransmitted.
             elif received_datagram.get_msg_type == msgType.ACK:
                 logging.info(f"Received ACK for msg_ID: {received_datagram.get_msg_id}")
                 if PENDING_TRACKING_ENABLED:
                     _ack_received(int(received_datagram.get_msg_id))
+                try:
+                    rx_queue.put(received_datagram)
+                    tui_refresh_event.set()  # Signal TUI to refresh display
+                except Full:
+                    logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
+                    continue
             
 
             # retransmit the previous sent message.
@@ -308,7 +312,6 @@ def _rx_loop():
                     _retransmit_oldest_pending()
                 
             else:
-                logging.warning(f"Received message with unknown type: {received_datagram.get_msg_type}")
                 raise ValueError("Unknown message type received.")
                 
         except ValueError as e:
@@ -417,7 +420,7 @@ def _tui_loop():
                 while not rx_queue.empty():
                     try:
                         received_datagram: Datagram = rx_queue.get_nowait()
-                        tui.add_message(received_datagram, received=True)
+                        tui.add_message(received_datagram, sent_by_self=False)
                         logging.debug(f"TUI processed received datagram ID: {received_datagram.get_msg_id}")
                     except Empty:
                         break  # No more messages to process
@@ -434,20 +437,35 @@ def _tui_loop():
                     logging.warning(f"Unknown command: {user_input}")
                     continue  # Ignore unknown commands
 
-                # send message as datagram
-                while len(user_input.encode('utf-8')) > int(config['datagram']['payload_size']):
-                    logging.warning("Input message is too long and will be truncated to fit payload size.")
-                    sliced_user_input = user_input[: int(config['datagram']['payload_size'])]
-                    datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
-                    queue_datagram(datagram)
-                    user_input = user_input[int(config['datagram']['payload_size']) :]  # Remove the part that was sent
-                
-                # Final slice (or if input was already short enough)
-                sliced_user_input = user_input
-                datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
-                queue_datagram(datagram)
-                tui.add_message(datagram)  # Add sent message to TUI display
-                tui.render_screen()  # Update TUI display after sending message
+                sliced_user_input = _slice_text_to_payload_chunks(user_input, PAYLOAD_SIZE-1)
+                sent_any = False
+
+                for chunk in sliced_user_input:
+                    datagram = Datagram.as_string(chunk, msg_type=msgType.DATA)
+                    if queue_datagram(datagram):
+                        tui.add_message(datagram, sent_by_self=True)  # Add sent message to TUI display
+                        sent_any = True
+                    else:
+                        logging.error("Failed to queue message for transmission. Stopping further chunks.")
+                        break
+                    sent_any = True
+                if sent_any:
+                    tui.render_screen() 
+
+                # slice longer messages into chunks of 23 bytes to fit into datagram payload, and enqueue each chunk separately.
+                #while len(user_input.encode('utf-8')) > PAYLOAD_SIZE-1:
+                #    logging.warning("Input message is too long and will be truncated to fit payload size.")
+                #    sliced_user_input = user_input[:PAYLOAD_SIZE-1]
+                #    datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
+                #    queue_datagram(datagram)
+                #    user_input = user_input[PAYLOAD_SIZE:]  # Remove the part that was sent
+                #
+                ## Final slice (or if input was already short enough)
+                #sliced_user_input = user_input
+                #datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
+                #queue_datagram(datagram)
+                #tui.add_message(datagram, sent_by_self=True)  # Add sent message to TUI display
+                #tui.render_screen()  # Update TUI display after sending message
     
         except Exception as e:
             logging.error(f"Error in TUI loop: {e}")
@@ -456,10 +474,37 @@ def _tui_loop():
         time.sleep(0.1)  # Sleep briefly to avoid tight error loop
     logging.debug("TUI loop stopped.")
 
+def _slice_text_to_payload_chunks(text: str, max_payload_bytes: int) -> list[str]:
+    """Split text into UTF-8-safe chunks, each <= max_payload_bytes."""
+    if max_payload_bytes <= 0:
+        raise ValueError("max_payload_bytes must be > 0")
 
-_windows_input_buffer = ""
+    chunks: list[str] = []
+    current_chars: list[str] = []
+    current_bytes = 0
 
+    for ch in text:
+        ch_bytes = len(ch.encode("utf-8"))
 
+        # Defensive: skip impossible-to-fit single chars
+        if ch_bytes > max_payload_bytes:
+            logging.warning("Skipping character that exceeds payload byte limit.")
+            continue
+
+        if current_chars and (current_bytes + ch_bytes > max_payload_bytes):
+            chunks.append("".join(current_chars))
+            current_chars = [ch]
+            current_bytes = ch_bytes
+        else:
+            current_chars.append(ch)
+            current_bytes += ch_bytes
+
+    if current_chars:
+        chunks.append("".join(current_chars))
+
+    return chunks
+
+_windows_input_buffer = ""  # Buffer for accumulating user input on Windows, since msvcrt.getwch() reads one character at a time
 def _poll_user_input() -> str | None:
     """Read one terminal line without blocking the TUI loop."""
     global _windows_input_buffer
@@ -900,6 +945,7 @@ if __name__ == "__main__":
     RETRANSMIT_ENABLED = bool(link_control_config.get("enable_retransmit", True))
     PENDING_TRACKING_ENABLED = bool(link_control_config.get("track_pending_data", True))
     EQUALIZER_ENABLED = bool(config["synchronization"].get("short_equalizer_enable", True))
+    PAYLOAD_SIZE = int(config['datagram']['payload_size'])
     # ================== Logging setup ==================
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)
@@ -909,8 +955,8 @@ if __name__ == "__main__":
         level_name=get_configured_log_level(config),
         session_name="debug",
         log_file=debug_file,
-        console=True,
-        file_output=True,
+        console=bool(config['logging']['log_to_console']),
+        file_output=bool(config['logging']['log_to_file']),
     )
 
     try:
