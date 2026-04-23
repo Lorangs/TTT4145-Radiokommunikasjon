@@ -75,7 +75,7 @@ def configure_project_logging(
     level_name: str | None = "INFO",
     session_name: str = "debug",
     log_file: str | os.PathLike[str] | None = None,
-    console: bool = True,
+    console: bool = False,
     file_output: bool = True,
 ) -> Path | None:
     log_level = parse_log_level(level_name)

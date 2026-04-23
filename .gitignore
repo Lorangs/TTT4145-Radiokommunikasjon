@@ -1,35 +1,37 @@
 # ignore all files in directory
 Channel_Simulator/*
 
+
+# ignore macOS Finder metadata
+.DS_Store
+
 # ignore python virtual environment
-.venv/*
-.venv
-
-# ignore all backup files
-*.backup
-
-# ignore logs and plots
-log/*
-artifacts/*
+.venv/
 
 # ignore python bytecode
 __pycache__/
 
+# ignore all backup files
+*.backup
+
+# ignore logs
+log/
+artifacts/
+rx_spectrum_analysis/
+stability_checks/
+tuning_results/
+initial_tests/
+
+
+
 #ignore filter coefficient files
 *.ftr.env
 
-# Drop outdated source files
-barker_code.py
-barker_detection.py
 
-# Ignore plots
-hardware_tester_plots/*
+
+# ignore generated experiment outputs
+#stability_checks/
+#tuning_results/
 
 # ignore pytest cache
 .pytest_cache/
-
-# local Pluto verification harness
-pluto_verify.py
-
-# Ignore macOS system files
-.DS_Store

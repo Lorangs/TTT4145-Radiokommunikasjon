@@ -34,7 +34,7 @@ from interleaver import Interleaver
 from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
-NUMBER_OF_DATAGRAMS = 1000
+NUMBER_OF_DATAGRAMS = 500
 TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
 SPINNER = ['|', '/', '-', '\\']
@@ -105,6 +105,7 @@ def queue_datagram(datagram: Datagram) -> bool:
 ##############################################################################################
 def _rx_loop():
     """Receive loop - continuously receive data from SDR and process it."""
+    global test_arr
     logging.debug("RX loop started.")
 
     while not stop_event.is_set():
@@ -138,8 +139,6 @@ def _rx_loop():
                 gold_index,
             )
 
-    
-                
             ### The following section attempts to decode the payload using the best rotation estimate from the gold code.
             ### Falls back to trying other rotations if decoding fails. 
             ### This is to handle cases where the gold-based rotation estimate is not perfect, which can happen at low SNR.
@@ -177,20 +176,14 @@ def _rx_loop():
 
                     break
                 except (ValueError, RuntimeError) as e:
-                    logging.debug(
-                        "Rotation decode attempt failed: gold_index=%s rotation=%s error=%s",
-                        gold_index,
-                        rotation,
-                        e,
-                    )
                     continue
 
             if received_datagram is None:
                 continue
             
             if received_datagram.get_msg_type == msgType.DATA:
-                logging.info(f"Received datagram: ID {received_datagram.get_msg_id}, Payload {received_datagram.get_payload_as_string()}")
-                ack_dgram = Datagram.as_ack(received_datagram.get_msg_id, received_datagram.get_timestamp_ms, payload=received_datagram.get_payload)
+                #logging.info(f"Received datagram: ID {received_datagram.get_msg_id}, Payload {received_datagram.get_payload_as_string()}")
+                ack_dgram = Datagram.as_ack(received_datagram.get_msg_id, received_datagram.get_timestamp_ms)
                 queue_datagram(ack_dgram)  # Send ACK for received datagram
                 try:
                     rx_queue.put(received_datagram)
@@ -199,11 +192,11 @@ def _rx_loop():
                     continue
 
         except ValueError as e:
-            logging.warning(f"Did not receive valid signal: {e}")
+            #logging.warning(f"Did not receive valid signal: {e}")
             time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
         except RuntimeError as e:
-            logging.error(f"Runtime error in RX loop: {e}")
+            #logging.error(f"Runtime error in RX loop: {e}")
             stop_event.set()  # Trigger shutdown on critical errors
             break
         except Exception as e:
@@ -546,7 +539,18 @@ if __name__ == "__main__":
     EQUALIZER_REGULARIZATION = float(
     config["synchronization"].get("short_equalizer_regularization", 1.0e-3)
 )
-    
+        # ================== Logging setup ==================
+    log_dir = "log"
+    os.makedirs(log_dir, exist_ok=True)
+    debug_file = os.path.join(log_dir, f"{datetime.now().date()}-debug.log")
+    configure_project_logging(
+        level_name=get_configured_log_level(config),
+        session_name="debug",
+        log_file=debug_file,
+        console=False,
+        file_output=True,
+    )
+
     # ================== Signal handlers for graceful shutdown ==================
     atexit.register(_cleanup)
     signal.signal(signal.SIGINT, _signal_handler)
@@ -584,15 +588,15 @@ if __name__ == "__main__":
     rx_queue: Queue[Datagram] = Queue(maxsize=NUMBER_OF_DATAGRAMS)       # Queue for incoming messages received by the RX thread to be processed by the TUI thread
     tx_queue: Queue[Datagram] = Queue(maxsize=NUMBER_OF_DATAGRAMS)       # Queue for outgoing messages from the TUI thread to be transmitted by the TX thread
 
+    test_arr = generate_test_datagrams(NUMBER_OF_DATAGRAMS)
     # ======================= start application =========================
     if start():
         logging.info("SDR Chat Application is running. Press Ctrl+C to stop.")
 
         try:
-            test_arr = generate_test_datagrams(NUMBER_OF_DATAGRAMS)
 
             while not stop_event.is_set():
-                time.sleep(1)  # Main thread can perform periodic tasks here if needed
+                time.sleep(5)  # Main thread can perform periodic tasks here if needed
                 
         except KeyboardInterrupt:
             while tx_queue.empty() is False:

@@ -19,7 +19,7 @@ from yaml import safe_load
 
 
 # import modules
-from chat_tui import ChatTUI
+#from chat_tui import ChatTUI
 from modulation import ModulationProtocol
 from datagram import Datagram, msgType
 from sdr_transciever import SDRTransciever
@@ -34,7 +34,7 @@ from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
 
-NUMBER_OF_DATAGRAMS = 1000
+NUMBER_OF_DATAGRAMS = 100
 TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
 STAGES = (
@@ -723,7 +723,7 @@ if __name__ == "__main__":
     fec_codec = FCCodec(config)
     conv_coder = ConvolutionalCoder(config)
     matched_filter = RRCFilter(config)
-    tui = ChatTUI(config)
+    #tui = ChatTUI(config)
     gold_detector = GoldCodeDetector(config)
     synchronizer = Synchronizer(config)
     sdr = SDRTransciever(config) # must be initilized after Matched Filter module.
