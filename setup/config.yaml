@@ -1,6 +1,8 @@
 # Logging configuration
 logging:
-  level: INFO  # Logging level: DEBUG, INFO, WARNING, ERROR
+  level: ERROR  # Logging level: DEBUG, INFO, WARNING, ERROR
+  console: False  # Enable logging to console
+  file: true  # Enable logging to file
 
 # Radio hardware settings
 radio:
@@ -14,10 +16,10 @@ tui:
 
 # Link control settings
 link_control:
-  enable_ack: True          # Enable ACK mechanism
+  enable_ack: False          # Enable ACK mechanism
   enable_nack: False        # Enable NACK mechanism
-  enable_retransmit: True   # Enable packet retransmission
-  track_pending_data: True  # Track pending data
+  enable_retransmit: False   # Enable packet retransmission
+  track_pending_data: False  # Track pending data
 
 # Datagram format parameters
 # These parameters are copies of the corresponding values in datagram.py.
@@ -37,7 +39,7 @@ datagram:
 
 # Transmitter settings
 transmitter:
-  tx_cyclic_buffer: True  # Enable/disable cyclic buffer
+  tx_cyclic_buffer: False  # Enable/disable cyclic buffer
   tx_gain_dB: 0  # TX gain in dB, range: -90 to 0 dB
   tx_bandwidth: 1e6  # TX bandwidth in Hz
   tx_carrier: 867.5e6  # TX local oscillator (carrier frequency) in Hz
@@ -47,11 +49,11 @@ transmitter:
 
 # Receiver settings
 receiver:
-  rx_gain_dB: 30  # RX gain in dB, range: 0 to 73 dB
+  rx_gain_dB: 40  # RX gain in dB, range: 0 to 73 dB
   rx_bandwidth: 1e6  # RX bandwidth in Hz
   rx_carrier: 865.5e6  # RX local oscillator (carrier frequency) in Hz
   gain_mode: manual  # Gain mode: "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
-  buffer_size: 32768  # RX buffer size
+  buffer_size: 16384  # RX buffer size
 
 # Modulation settings
 modulation:

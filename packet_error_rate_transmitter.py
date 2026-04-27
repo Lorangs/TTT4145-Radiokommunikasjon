@@ -34,8 +34,8 @@ from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
 
-NUMBER_OF_DATAGRAMS = 10000
-TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
+NUMBER_OF_DATAGRAMS = 500
+
 
 STAGES = (
     "Generating Datagrams",
@@ -75,11 +75,13 @@ def generate_test_datagrams(num_datagrams: int) -> list[Datagram]:
     datagrams = []
     for i in range(num_datagrams):
         msg_id = i % 256  # Wrap around at 255
-        timestamp_ms = int(time.time() * 1000) % (2**32)  # Current time in ms, wrapped to fit in uint32
+        timestamp_ms = int(time.time() * 1000) % (1<<32)  # Current time in ms, wrapped to fit in uint32
+        
         _payload = np.array([], dtype=np.uint8) # Simple payload: string representation of the index
-        while i > 0:
-            _payload = np.append(arr=_payload, values=np.uint8(i % 256))
-            i //= 256
+        copy_i = i  # Make a copy of i to manipulate for payload generation
+        while copy_i > 0:
+            _payload = np.append(arr=_payload, values=np.uint8(copy_i % 256))
+            copy_i //= 256
 
         dgram = Datagram(
             msg_id=msg_id, 
@@ -114,7 +116,6 @@ def num_datagram_errors(original: list[Datagram], received: list[Datagram]) -> i
     return error_count
 
 
-
 ##################################################################################
 # ============================== Message Handling ================================
 ##################################################################################
@@ -141,7 +142,7 @@ def _tx_loop():
 
     while not stop_event.is_set():
         try:
-            tx_datagram: Datagram = tx_queue.get(timeout=0.1) # Wait for message to send
+            tx_datagram: Datagram = tx_queue.get_nowait() # Wait for message to send
 
             fec_coded_data = fec_codec.encode(tx_datagram.pack())
             interleaved_data = interleaver.interleave(fec_coded_data)
@@ -156,7 +157,6 @@ def _tx_loop():
             else:
                 padded_signal = matched_filter.pad_signal_front_and_back(upsampled_signal)  # Pad signal to avoid edge effects from filtering
                 filtered_signal = matched_filter.apply_filter(padded_signal)
-
 
             # add guard symbols before and after the signal.
             signal_for_transmission = np.concatenate([GUARD_SYMBOLS, filtered_signal, GUARD_SYMBOLS])
@@ -174,7 +174,6 @@ def _tx_loop():
             break
         except Exception as e:
             logging.error(f"Error: {e}")
-            time.sleep(0.05)  # Sleep briefly to avoid tight error loop
             continue
 
     logging.debug("TX loop stopped.")
@@ -467,8 +466,6 @@ def calculate_expected_payload_symbols(
 
     
 
-
-
 if __name__ == "__main__":
     # ================= read configuration file =================
     try:
@@ -556,7 +553,6 @@ if __name__ == "__main__":
 
     # ================== Message queues for inter-thread communication ==================
     tx_queue: Queue[Datagram] = Queue(maxsize=NUMBER_OF_DATAGRAMS)       # Queue for outgoing messages to be transmitted by the TX thread
-   
 
     # ======================= start application =========================
     if start():
