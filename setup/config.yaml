@@ -1,12 +1,12 @@
 # Logging configuration
 logging:
-  level: ERROR  # Logging level: DEBUG, INFO, WARNING, ERROR
+  level: DEBUG  # Logging level: DEBUG, INFO, WARNING, ERROR
   log_messages: true  # Whether to log messages (datagrams) in addition to events
 
 # Radio hardware settings
 radio:
   ip_address: ip:192.168.0.151  # IP address of SDR radio
-  queue_size: 1000  # Max size of RX and TX queues.
+  queue_size: 4000  # Max size of RX and TX queues. Datagrams
   num_tui_msg: 100  # Number of messages to display in the TUI.
   debug_mode: false  # If True, the system will run in debug mode with live plotting of signals.
 

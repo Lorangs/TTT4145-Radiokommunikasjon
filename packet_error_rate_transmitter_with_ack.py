@@ -64,7 +64,7 @@ def _tx_progress_snapshot() -> tuple[int, int]:
 def _format_progress_bar(done: int, total: int, width: int = 40) -> str:
     if total <= 0:
         return f"[{'-' * width}]   0.00% (0/0)"
-    done = max(0, min(done, total))
+    done = max(0, done)
     filled = int((done / total) * width)
     bar = "#" * filled + "-" * (width - filled)
     pct = (done / total) * 100.0
@@ -698,7 +698,7 @@ if __name__ == "__main__":
         level_name=get_configured_log_level(config),
         session_name="debug",
         log_file=debug_file,
-        console=True,
+        console=False,
         file_output=True,
     )
 
