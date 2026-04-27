@@ -1061,7 +1061,7 @@ if __name__ == "__main__":
             else:
                 # Headless mode main loop
                 while not stop_event.is_set():
-                    time.sleep(0.5)
+                    time.sleep(1)
 
         except KeyboardInterrupt:
             logging.info("KeyboardInterrupt received. Stopping application...")
