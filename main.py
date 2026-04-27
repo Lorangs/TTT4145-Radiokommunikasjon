@@ -323,7 +323,7 @@ def _rx_loop():
             if NACK_ENABLED:
                 nack_datagram = Datagram.as_nack()
                 queue_datagram(nack_datagram)
-            time.sleep(0.05)  # Sleep briefly to avoid tight error loop
+            #time.sleep(0.05)  # Sleep briefly to avoid tight error loop
             continue
         except RuntimeError as e:
             logging.error(f"Runtime error in RX loop: {e}")
@@ -331,7 +331,7 @@ def _rx_loop():
             break
         except Exception as e:
             logging.error(f"Unexpected error in RX loop: {e}")
-            time.sleep(0.05)  # Sleep briefly to avoid tight error loop
+            #time.sleep(0.05)  # Sleep briefly to avoid tight error loop
             continue
 
     logging.debug("RX loop stopped.")
@@ -940,8 +940,8 @@ if __name__ == "__main__":
         level_name=get_configured_log_level(config),
         session_name="debug",
         log_file=debug_file,
-        console=True,
-        file_output=True,
+        console=bool(config['logging'].get('console', True)),
+        file_output=bool(config['logging'].get('file', True))
     )
 
 

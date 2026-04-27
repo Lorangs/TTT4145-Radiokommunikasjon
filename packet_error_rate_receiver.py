@@ -34,20 +34,20 @@ from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
 NUMBER_OF_DATAGRAMS = 500
-TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
 SPINNER = ['|', '/', '-', '\\']
-
 
 def generate_test_datagrams(num_datagrams: int) -> list[Datagram]:
     datagrams = []
     for i in range(num_datagrams):
         msg_id = i % 256  # Wrap around at 255
-        timestamp_ms = int(time.time() * 1000) % (2**32)  # Current time in ms, wrapped to fit in uint32
-        _payload = np.array([], dtype=np.uint8) # Simple payload: string representation of the index
-        while i > 0:
-            _payload = np.append(arr=_payload, values=np.uint8(i % 256))
-            i //= 256
+        timestamp_ms = int(time.time() * 1000) % (1<<32)  # Current time in ms, wrapped to fit in uint32
+        _payload = np.array([], dtype=np.uint8)
+         # Simple payload: string representation of the index
+        copy_i = i
+        while copy_i > 0:
+            _payload = np.append(arr=_payload, values=np.uint8(copy_i % 256))
+            copy_i //= 256
 
         dgram = Datagram(
             msg_id=msg_id, 
@@ -194,7 +194,7 @@ def _rx_loop():
 
         except ValueError as e:
             logging.warning(f"Did not receive valid signal: {e}")
-            time.sleep(0.01)
+            #time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
         except RuntimeError as e:
             logging.error(f"Runtime error in RX loop: {e}")
@@ -202,7 +202,7 @@ def _rx_loop():
             break
         except Exception as e:
             logging.error(f"Unexpected error in RX loop: {e}")
-            time.sleep(0.01)
+            #time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
 
     logging.debug("RX loop stopped.")

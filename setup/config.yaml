@@ -1,6 +1,8 @@
 # Logging configuration
 logging:
   level: ERROR  # Logging level: DEBUG, INFO, WARNING, ERROR
+  console: False  # Enable logging to console
+  file: true  # Enable logging to file
 
 # Radio hardware settings
 radio:
@@ -47,11 +49,11 @@ transmitter:
 
 # Receiver settings
 receiver:
-  rx_gain_dB: 35  # RX gain in dB, range: 0 to 73 dB
+  rx_gain_dB: 40  # RX gain in dB, range: 0 to 73 dB
   rx_bandwidth: 1e6  # RX bandwidth in Hz
   rx_carrier: 865.5e6  # RX local oscillator (carrier frequency) in Hz
   gain_mode: manual  # Gain mode: "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
-  buffer_size: 16383  # RX buffer size
+  buffer_size: 16384  # RX buffer size
 
 # Modulation settings
 modulation:
