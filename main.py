@@ -133,7 +133,6 @@ def _rx_loop():
                 EXPECTED_PAYLOAD_SYMBOLS,
             )
 
-            
             # === Send data to plotter if debug mode is enabled ===
             if debug_mode and plotter is not None:
                 try:
@@ -155,6 +154,7 @@ def _rx_loop():
                 EXPECTED_PAYLOAD_SYMBOLS
             ):
                 continue
+           
             best_rotation = gold_detector.estimate_rotation_from_gold(
                 fine_freq_adjusted,
                 gold_index,
@@ -420,8 +420,8 @@ def _tui_loop():
     """TUI loop - continuously check for user input and enqueue messages to send."""
     logging.debug("TUI loop started.")
 
-    fps = 10    # Frames Per Second
-    render_interval = 1.0 / fps
+    
+    render_interval = 1.0 / FRAMES_PER_SECOND
     next_render_time = time.monotonic()
     tui.render_screen()  # Initial render of TUI
 
@@ -944,13 +944,7 @@ if __name__ == "__main__":
         file_output=True,
     )
 
-    try:
-        with open(log_file, 'a') as f:
-            f.write(f"\n\n--- New Chat Session Started at {datetime.now().time()} ---\n")
-    except Exception as e:
-        logging.error(f"Error initializing chat history log: {e}")
-        raise e
-    
+
     # ================== Signal handlers for graceful shutdown ==================
     atexit.register(_cleanup)
     signal.signal(signal.SIGINT, _signal_handler)
@@ -986,6 +980,7 @@ if __name__ == "__main__":
     # ================= Initialize additional constants =================
     EXPECTED_PAYLOAD_SYMBOLS = calculate_expected_payload_symbols(config)
     PAYLOAD_SIZE = int(config['datagram']['payload_size'])
+    FRAMES_PER_SECOND = int(config['tui']['frames_per_second'])
 
     # ================== Threading and synchronization primitives ==================
     stop_event: threading.Event = threading.Event()
