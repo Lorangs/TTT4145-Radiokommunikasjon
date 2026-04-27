@@ -23,7 +23,7 @@ class SDRTransciever:
         """Connect to Adalm Pluto SDR and configure."""
         try:
             self.sdr = adi.Pluto(self.config['radio']['ip_address'])
-            logging.info(f"Connected to SDR: {self.config['radio']['ip_address']}.")
+            logging.debug(f"Connected to SDR: {self.config['radio']['ip_address']}.")
 
             # Configure TX
             self.sdr.tx_rf_bandwidth = int(float(self.config['transmitter']['tx_bandwidth']))
@@ -32,11 +32,11 @@ class SDRTransciever:
             self.sdr.sample_rate = int(float(self.config['modulation']['sample_rate']))
             self.sdr.tx_cyclic_buffer = bool(self.config['transmitter']['tx_cyclic_buffer'])
             
-            logging.info(f"TX Bandwidth\t: {self.sdr.tx_rf_bandwidth/1e6:.3f} MHz")
-            logging.info(f"TX Carrier\t: {self.sdr.tx_lo/1e6:.3f} MHz")
-            logging.info(f"TX Gain\t\t: {self.sdr.tx_hardwaregain_chan0} dB")
-            logging.info(f"Sample Rate\t: {self.sdr.sample_rate/1e6:.3f} MS/s")
-            logging.info(f"TX Cyclic Buffer: {self.sdr.tx_cyclic_buffer}")
+            logging.debug(f"TX Bandwidth\t: {self.sdr.tx_rf_bandwidth/1e6:.3f} MHz")
+            logging.debug(f"TX Carrier\t: {self.sdr.tx_lo/1e6:.3f} MHz")
+            logging.debug(f"TX Gain\t\t: {self.sdr.tx_hardwaregain_chan0} dB")
+            logging.debug(f"Sample Rate\t: {self.sdr.sample_rate/1e6:.3f} MS/s")
+            logging.debug(f"TX Cyclic Buffer: {self.sdr.tx_cyclic_buffer}")
 
             # Configure RX
             self.sdr.rx_rf_bandwidth = int(float(self.config['receiver']['rx_bandwidth']))
@@ -45,20 +45,19 @@ class SDRTransciever:
             self.sdr.gain_control_mode_chan0 = self.config['receiver']['gain_mode']
             if self.config['receiver']['gain_mode'].strip().lower() == 'manual':
                 self.sdr.rx_hardwaregain_chan0 = float(self.config['receiver']['rx_gain_dB'])
-                logging.info(f"RX Gain\t\t: {self.sdr.rx_hardwaregain_chan0} dB (manual mode)")
+                logging.debug(f"RX Gain\t\t: {self.sdr.rx_hardwaregain_chan0} dB (manual mode)")
             else:
-                logging.info(f"RX Gain Mode\t: {self.sdr.gain_control_mode_chan0} (automatic mode)")
-
-            logging.info(f"RX Bandwidth\t: {self.sdr.rx_rf_bandwidth/1e6:.3f} MHz")
-            logging.info(f"RX Carrier\t: {self.sdr.rx_lo/1e6:.3f} MHz")
-            logging.info(f"RX Buffer Size\t: {self.sdr.rx_buffer_size} samples")
+                logging.debug(f"RX Gain Mode\t: {self.sdr.gain_control_mode_chan0} (automatic mode)")
+            logging.debug(f"RX Bandwidth\t: {self.sdr.rx_rf_bandwidth/1e6:.3f} MHz")
+            logging.debug(f"RX Carrier\t: {self.sdr.rx_lo/1e6:.3f} MHz")
+            logging.debug(f"RX Buffer Size\t: {self.sdr.rx_buffer_size} samples")
             
             # set TX and RX filter
             if self.config['filter']['hardware_filter_enable']:
                 self.sdr.filter = str(self.config['filter']['hardware_filter_file']).strip()
-                logging.info(f"RRC Filter\t: Hardware filtering enabled. Filter file: {self.config['filter']['hardware_filter_file']}")
+                logging.debug(f"RRC Filter\t: Hardware filtering enabled. Filter file: {self.config['filter']['hardware_filter_file']}")
             else:
-                logging.info("RRC Filter\t: Software filtering enabled.")
+                logging.debug("RRC Filter\t: Software filtering enabled.")
             return True
         
         except Exception as e:

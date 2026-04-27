@@ -14,8 +14,8 @@ from binascii import crc_hqx
 # Constants defining datagram structure and sizes
 # These are duplicates of config.yaml values.
 ##########################################################
-MSG_ID_SIZE = 1
-MSG_TYPE_SIZE = 1
+MSG_ID_SIZE         = 1
+MSG_TYPE_SIZE       = 1
 TIMESTAMP_SIZE = 4
 PAYLOAD_LENGTH_SIZE = 1
 CRC16_SIZE = 2
@@ -33,13 +33,13 @@ class msgType(Enum):
 @dataclass(init=False, repr=False)
 class Datagram():
     """ 
-    Messaage format:
+    Message format:
         - msg_type: 1 byte string (DATA or ACK)
         - msg_id: 1 byte np.uint8 (message ID for tracking)
         - timestamp: 4 bytes np.uint32 (UNIX timestamp in seconds when the datagram was created)
         - payload_length: 1 byte np.uint8 logical payload length
         - payload_crc16: 2 bytes CRC-16-CCITT over the logical datagram contents
-        - payload: fixed 247-byte field. Unused bytes are zero-padded on the wire.
+        - payload: fixed 27-byte field. Unused bytes are zero-padded on the wire.
     """
 
     _msg_id: np.uint8

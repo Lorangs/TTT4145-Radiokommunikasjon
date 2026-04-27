@@ -408,7 +408,10 @@ def _tx_loop():
     logging.debug("TX loop stopped.")
 
 def _tui_loop():
-    """TUI loop - continuously check for user input and enqueue messages to send."""
+    """
+        TUI loop - continuously check for user input and enqueue messages to send.
+        Only render if there are new messages or user input to process, to avoid unnecessary CPU usage and flickering.
+    """
     logging.debug("TUI loop started.")
 
     tui.render_screen()  # Initial render of TUI
@@ -452,26 +455,11 @@ def _tui_loop():
                 if sent_any:
                     tui.render_screen() 
 
-                # slice longer messages into chunks of 23 bytes to fit into datagram payload, and enqueue each chunk separately.
-                #while len(user_input.encode('utf-8')) > PAYLOAD_SIZE-1:
-                #    logging.warning("Input message is too long and will be truncated to fit payload size.")
-                #    sliced_user_input = user_input[:PAYLOAD_SIZE-1]
-                #    datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
-                #    queue_datagram(datagram)
-                #    user_input = user_input[PAYLOAD_SIZE:]  # Remove the part that was sent
-                #
-                ## Final slice (or if input was already short enough)
-                #sliced_user_input = user_input
-                #datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
-                #queue_datagram(datagram)
-                #tui.add_message(datagram, sent_by_self=True)  # Add sent message to TUI display
-                #tui.render_screen()  # Update TUI display after sending message
-    
         except Exception as e:
             logging.error(f"Error in TUI loop: {e}")
             continue
 
-        time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+        time.sleep(0.5)  # Sleep briefly to reduce CPU usage.
     logging.debug("TUI loop stopped.")
 
 def _slice_text_to_payload_chunks(text: str, max_payload_bytes: int) -> list[str]:
