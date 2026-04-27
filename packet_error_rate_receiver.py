@@ -33,7 +33,7 @@ from interleaver import Interleaver
 from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
-NUMBER_OF_DATAGRAMS = 1000
+NUMBER_OF_DATAGRAMS = 500
 TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
 SPINNER = ['|', '/', '-', '\\']
@@ -186,8 +186,6 @@ def _rx_loop():
 
             if received_datagram is None:
                 continue
-
-
             try:
                 rx_queue.put(received_datagram)
             except Full:
@@ -196,7 +194,7 @@ def _rx_loop():
 
         except ValueError as e:
             logging.warning(f"Did not receive valid signal: {e}")
-            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+            time.sleep(0.01)
             continue
         except RuntimeError as e:
             logging.error(f"Runtime error in RX loop: {e}")
@@ -204,7 +202,7 @@ def _rx_loop():
             break
         except Exception as e:
             logging.error(f"Unexpected error in RX loop: {e}")
-            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
+            time.sleep(0.01)
             continue
 
     logging.debug("RX loop stopped.")
