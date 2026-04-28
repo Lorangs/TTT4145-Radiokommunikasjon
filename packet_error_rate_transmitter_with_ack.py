@@ -153,16 +153,15 @@ def _track_sent_data(datagram: Datagram) -> None:
             _, retries, _, _ = pending_ack[idx]
             pending_ack[idx] = (msg_id, retries, datagram, now_ms)
 
-def _ack_received(payload: npt.NDArray[np.uint8]) -> None:
+def _ack_received(msg_id: int) -> None:
     """Handle received ACK by removing the corresponding datagram from pending_ack."""
     with pending_lock:
-        idx = _find_pending_payload(payload)
+        idx = _find_pending_index(msg_id)
         if idx is not None:
             pending_ack.pop(idx)
-            #logging.info(f"Received ACK for datagram ID {payload[0]}. Removed from pending ACKs.")
+            logging.info(f"Received ACK for datagram ID {msg_id}. Removed from pending ACKs.")
         else:
-            logging.warning(f"Received ACK with payload {payload} but no matching pending datagram found.")
-
+            logging.warning(f"Received ACK for unknown datagram ID {msg_id}. No matching pending ACK found.")
         
 
 ##############################################################################################
@@ -249,7 +248,7 @@ def _rx_loop():
 
             if received_datagram.get_msg_type == msgType.ACK:
                 if PENDING_TRACKING_ENABLED:
-                    _ack_received(received_datagram.get_payload())
+                    _ack_received(received_datagram.get_msg_id)
 
         except ValueError as e:
             logging.warning(f"Did not receive valid signal: {e}")
@@ -266,6 +265,7 @@ def _rx_loop():
 
 def _tx_loop():
     """Transmit loop - continuously check for outgoing messages and transmit them."""
+    global tx_queue
     logging.debug("TX loop started.")
 
     while not stop_event.is_set():
@@ -291,15 +291,11 @@ def _tx_loop():
             signal_for_transmission = np.concatenate([GUARD_SYMBOLS, filtered_signal, GUARD_SYMBOLS])
             signal_for_transmission = _normalize_tx_burst(signal_for_transmission, TX_PEAK_SCALE)
 
-            sdr.send_signal(signal_for_transmission)
+            if (tx_datagram.get_msg_type == msgType.DATA and PENDING_TRACKING_ENABLED):
+                _track_sent_data(tx_datagram)
+         
             _inc_tx_sent()
-
-            if (
-                tx_datagram.get_msg_type == msgType.DATA
-                and PENDING_TRACKING_ENABLED
-            ):
-                _track_sent_data(tx_datagram) 
-            
+            sdr.send_signal(signal_for_transmission)
 
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
 
@@ -377,7 +373,7 @@ def _ack_timeout_loop():
 
     while not stop_event.is_set():
         if not RETRANSMIT_ENABLED:
-            time.sleep(1.0)  # Sleep longer if retransmission is disabled, since we won't be doing anything in this loop
+            time.sleep(0.1)  # Sleep longer if retransmission is disabled, since we won't be doing anything in this loop
             continue
         
         now_ms = time.time() * 1000.0
@@ -409,7 +405,7 @@ def _ack_timeout_loop():
             queue_datagram(dgram)
             logging.info(f"Timeout retransmit for datagram ID {msg_id} (retry {retry_count}).")
  
-        time.sleep(0.01)
+        time.sleep(0.1)
 
     logging.debug("ACK timeout loop stopped.")
 
@@ -770,7 +766,7 @@ if __name__ == "__main__":
                 if stop_event.is_set():
                     break
                 queue_datagram(datagram)
-                time.sleep(0.5)
+                time.sleep(4)
             all_enqueued.set()  # Signal that all datagrams have been enqueued
             logging.debug("All datagrams have been enqueued for transmission.")
 

@@ -34,7 +34,7 @@ from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
 
-NUMBER_OF_DATAGRAMS = 500
+NUMBER_OF_DATAGRAMS = 100
 
 STAGES = (
     "Generating Datagrams",
@@ -261,7 +261,7 @@ def start():
 
 def stop():
     """Stop the SDR Chat Application."""
-    global tx_thread, tui_thread, ack_timeout_thread
+    global tx_thread, tui_thread
     logging.info("Stopping SDR Chat Application...")
     stop_event.set()
 
@@ -501,8 +501,8 @@ if __name__ == "__main__":
         level_name=get_configured_log_level(config),
         session_name="debug",
         log_file=debug_file,
-        console=True,
-        file_output=True,
+        console=bool(config["logging"].get("console", False)),
+        file_output=bool(config["logging"].get("file", True)),
     )
 
     try:

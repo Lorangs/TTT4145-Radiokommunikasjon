@@ -179,12 +179,12 @@ def _rx_loop():
             if received_datagram.get_msg_type == msgType.DATA:
                 #logging.info(f"Received datagram: ID {received_datagram.get_msg_id}, Payload {received_datagram.get_payload_as_string()}")
                 ack_dgram = Datagram.as_ack(received_datagram.get_msg_id, received_datagram.get_timestamp_ms)
-                queue_datagram(ack_dgram)  # Send ACK for received datagram
                 try:
-                    rx_queue.put(received_datagram)
+                    rx_queue.put_nowait(received_datagram)
                 except Full:
                     logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
                     continue
+                queue_datagram(ack_dgram)  # Send ACK for received datagram
 
         except ValueError as e:
             #logging.warning(f"Did not receive valid signal: {e}")
