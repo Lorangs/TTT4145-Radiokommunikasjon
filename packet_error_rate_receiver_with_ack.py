@@ -35,7 +35,6 @@ from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
 NUMBER_OF_DATAGRAMS = 500
-TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
 SPINNER = ['|', '/', '-', '\\']
 
@@ -193,7 +192,6 @@ def _rx_loop():
 
         except ValueError as e:
             #logging.warning(f"Did not receive valid signal: {e}")
-            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
         except RuntimeError as e:
             #logging.error(f"Runtime error in RX loop: {e}")
@@ -201,7 +199,6 @@ def _rx_loop():
             break
         except Exception as e:
             logging.error(f"Unexpected error in RX loop: {e}")
-            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
 
     logging.debug("RX loop stopped.")
@@ -212,7 +209,7 @@ def _tx_loop():
 
     while not stop_event.is_set():
         try:
-            tx_datagram: Datagram = tx_queue.get(timeout=0.1) # Wait for message to send
+            tx_datagram: Datagram = tx_queue.get_nowait() # Wait for message to send
 
             fec_coded_data = fec_codec.encode(tx_datagram.pack())
             interleaved_data = interleaver.interleave(fec_coded_data)
@@ -236,7 +233,7 @@ def _tx_loop():
 
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
 
-            time.sleep(0.05)
+            time.sleep(0.005)
         except Empty:
             continue  # No message to send, loop again
         except RuntimeError as e:
@@ -245,7 +242,6 @@ def _tx_loop():
             break
         except Exception as e:
             logging.error(f"Error: {e}")
-            time.sleep(0.05)  # Sleep briefly to avoid tight error loop
             continue
 
     logging.debug("TX loop stopped.")
@@ -547,8 +543,8 @@ if __name__ == "__main__":
         level_name=get_configured_log_level(config),
         session_name="debug",
         log_file=debug_file,
-        console=False,
-        file_output=True,
+        console=bool(config["logging"].get("console", True)),
+        file_output=bool(config["logging"].get("file", True)),
     )
 
     # ================== Signal handlers for graceful shutdown ==================
@@ -596,11 +592,11 @@ if __name__ == "__main__":
         try:
 
             while not stop_event.is_set():
-                time.sleep(5)  # Main thread can perform periodic tasks here if needed
+                time.sleep(2)  # Main thread can perform periodic tasks here if needed
                 
         except KeyboardInterrupt:
             while tx_queue.empty() is False:
-                time.sleep(0.1)  # Wait for TX queue to drain before finalizing results
+                time.sleep(1)  # Wait for TX queue to drain before finalizing results
 
             finalize_result_once()
             stop_event.set()
