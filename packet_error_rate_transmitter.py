@@ -36,7 +36,6 @@ from project_logger import configure_project_logging, get_configured_log_level
 
 NUMBER_OF_DATAGRAMS = 500
 
-
 STAGES = (
     "Generating Datagrams",
     "Transmitting Datagrams",
@@ -502,8 +501,8 @@ if __name__ == "__main__":
         level_name=get_configured_log_level(config),
         session_name="debug",
         log_file=debug_file,
-        console=True,
-        file_output=True,
+        console=bool(config["logging"].get("log_to_console", False)),
+        file_output=bool(config["logging"].get("log_to_file", True)),
     )
 
     try:
