@@ -33,7 +33,7 @@ from interleaver import Interleaver
 from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
-NUMBER_OF_DATAGRAMS = 500
+NUMBER_OF_DATAGRAMS = 100
 
 SPINNER = ['|', '/', '-', '\\']
 
