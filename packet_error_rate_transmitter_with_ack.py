@@ -122,7 +122,7 @@ def queue_datagram(datagram: Datagram) -> None:
     """Enqueue a datagram for transmission."""
     global tx_queue
     try: 
-        tx_queue.put_nowait(datagram)
+        tx_queue.put(datagram, timeout=0.1)
         logging.info(f"Queued datagram ID {datagram.get_msg_id} for transmission.")
     except Full:
         logging.error(f"Failed to queue datagram ID {datagram.get_msg_id}. TX queue is full.")
@@ -142,6 +142,7 @@ def _find_pending_payload(payload: npt.NDArray[np.uint8]) -> int | None:
 
 def _track_sent_data(datagram: Datagram) -> None:
     """Track sent DATA datagrams for potential retransmission if ACK is not received."""
+    global pending_ack
     msg_id = int(datagram.get_msg_id)
     now_ms = time.time() * 1000.0
     with pending_lock:
@@ -201,12 +202,6 @@ def _rx_loop():
                 fine_freq_adjusted,
                 gold_index,
             )
-
-    
-                
-            ### The following section attempts to decode the payload using the best rotation estimate from the gold code.
-            ### Falls back to trying other rotations if decoding fails. 
-            ### This is to handle cases where the gold-based rotation estimate is not perfect, which can happen at low SNR.
 
             received_datagram = None
 
@@ -411,12 +406,9 @@ def _ack_timeout_loop():
                 pending_ack.pop(i)
 
         for msg_id, dgram, retry_count in to_retransmit:
-            try:
-                tx_queue.put_nowait(dgram)
-                logging.info(f"Timeout retransmit for datagram ID {msg_id} (retry {retry_count}).")
-            except Full:
-                logging.warning(f"TX queue full. Could not retransmit datagram ID {msg_id}.")
-
+            queue_datagram(dgram)
+            logging.info(f"Timeout retransmit for datagram ID {msg_id} (retry {retry_count}).")
+ 
         time.sleep(0.01)
 
     logging.debug("ACK timeout loop stopped.")
@@ -439,7 +431,7 @@ def start():
         tx_thread = threading.Thread(target=_tx_loop, daemon=True, name="TX_Thread")
         rx_thread = threading.Thread(target=_rx_loop, daemon=True, name="RX_Thread")
         tui_thread = threading.Thread(target=_tui_loop, daemon=True, name="TUI_Thread")
-        ack_timeout_thread = threading.Thread(target=_ack_timeout_loop, daemon=True, name="ACK_Timeout_Thread")
+        ack_timeout_thread = threading.Thread(target=_ack_timeout_loop, daemon=True, name="ACK_Thread")
 
         tx_thread.start()
         rx_thread.start()
@@ -458,7 +450,7 @@ def stop():
     logging.info("Stopping SDR Chat Application...")
     stop_event.set()
 
-    for name, thread in (("TX_Thread", tx_thread), ("TUI_Thread", tui_thread), ("RX_Thread", rx_thread), ("ACK_Timeout_Thread", ack_timeout_thread)):
+    for name, thread in (("TX_Thread", tx_thread), ("TUI_Thread", tui_thread), ("RX_Thread", rx_thread), ("ACK_Thread", ack_timeout_thread)):
         if thread and thread.is_alive():
             try:
                 thread.join(timeout=2.0)
@@ -780,6 +772,7 @@ if __name__ == "__main__":
                 queue_datagram(datagram)
                 time.sleep(0.5)
             all_enqueued.set()  # Signal that all datagrams have been enqueued
+            logging.debug("All datagrams have been enqueued for transmission.")
 
             while not stop_event.is_set():
                 time.sleep(1)  # Wait for all messages to be transmitted
