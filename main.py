@@ -15,8 +15,6 @@ if os.name == "nt":
     import msvcrt
 else:
     import select
-    import termios
-    import tty
 
 # import third party moduels
 import numpy as np
@@ -53,6 +51,7 @@ def queue_datagram(datagram: Datagram) -> bool:
         return False
 
 def _find_pending_index(msg_id: int) -> int | None:
+    global pending_ack
     for i, (pending_msg_id, _, _, _) in enumerate(pending_ack):
         if pending_msg_id == msg_id:
             return i
@@ -60,6 +59,7 @@ def _find_pending_index(msg_id: int) -> int | None:
 
 def _track_sent_data(datagram: Datagram) -> None:
     """Track sent DATA datagrams for potential retransmission if ACK is not received."""
+    global pending_ack
     msg_id = int(datagram.get_msg_id)
     now_ms = time.time() * 1000.0
     with pending_lock:
@@ -72,15 +72,16 @@ def _track_sent_data(datagram: Datagram) -> None:
 
 def _ack_received(msg_id: int) -> None:
     """Handle received ACK by removing the corresponding datagram from pending_ack."""
+    global pending_ack
     with pending_lock:
         idx = _find_pending_index(msg_id)
         if idx is not None:
             pending_ack.pop(idx)
 
 
-
 def _retransmit_oldest_pending() -> None:
     """Retransmit the oldest pending datagram if any exist and have not exceeded max retries."""
+    global pending_ack
     with pending_lock:
         if not pending_ack:
             return
@@ -104,6 +105,7 @@ def _retransmit_oldest_pending() -> None:
 ##############################################################################################
 def _rx_loop():
     """Receive loop - continuously receive data from SDR and process it."""
+    global rx_queue, plot_data_queue, debug_mode, plotter
     logging.debug("RX loop started.")
 
     while not stop_event.is_set():
@@ -113,21 +115,11 @@ def _rx_loop():
             coarse_freq_adjusted = synchronizer.coarse_frequenzy_synchronization(received_signal)
             if coarse_freq_adjusted is None:
                 continue    # skip if signal is too weak to process
-            #logging.debug("Signal detected above noise floor. Proceeding with synchronization and decoding.")
 
             padded_signal = matched_filter.pad_signal_front_and_back(coarse_freq_adjusted)  
             filtered_signal = matched_filter.apply_filter(padded_signal)
-            #logging.debug("Applied matched filter to received signal.")
-
-            #normalized_matched_filtered = synchronizer.normalize_matched_filter_output(filtered_signal)
-            #logging.debug("Normalized matched filter output for synchronization.")
-
             time_adjusted = synchronizer.gardner_timing_synchronization(filtered_signal)
-            #logging.debug("Performed Gardner timing synchronization on received signal.")
-
             fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
-            #logging.debug("Performed fine frequency synchronization on received signal.")
-
             gold_index, _ = gold_detector.detect_with_rotation(
                 fine_freq_adjusted,
                 EXPECTED_PAYLOAD_SYMBOLS,
@@ -154,48 +146,11 @@ def _rx_loop():
                 EXPECTED_PAYLOAD_SYMBOLS
             ):
                 continue
-           
             best_rotation = gold_detector.estimate_rotation_from_gold(
                 fine_freq_adjusted,
                 gold_index,
             )
-
-            # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            eye_window = _extract_eye_window(
-                filtered_signal,
-                gold_index,
-                EXPECTED_PAYLOAD_SYMBOLS,
-                SAMPLES_PER_SYMBOL,
-            )
-            eye_offset = _best_eye_offset(eye_window, SAMPLES_PER_SYMBOL)
-            aligned_eye_window = eye_window[eye_offset:]
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "psd",
-                coarse_freq_adjusted,
-                title=f"RX PSD After Coarse Frequency Correction {timestamp}",
-                stem=f"rx_psd_after_coarse_frequency_correction_{timestamp}",
-                sample_rate=float(config["modulation"]["sample_rate"]),
-                center_freq=float(config["plotter"]["center_freq"]),
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "eye",
-                aligned_eye_window,
-                title=f"RX Eye Diagram After Matched Filter {timestamp}",
-                stem=f"rx_eye_after_matched_filter_{timestamp}",
-                samples_per_symbol=SAMPLES_PER_SYMBOL,
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "constellation",
-                time_adjusted,
-                title=f"RX Constellation After Gardner Timing Recovery {timestamp}",
-                stem=f"rx_constellation_after_gardner_timing_{timestamp}",
-
-            )
-                
+          
             # Try the Gold-based rotation first, then fall back to the other
             # allowed constellation rotations if decode fails.
             selected_rotated_signal = None
@@ -254,42 +209,79 @@ def _rx_loop():
             if received_datagram is None:
                 continue
 
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "constellation",
-                selected_rotated_signal,
-                title=f"RX Stream Constellation After Selected Rotation {timestamp}",
-                stem=f"rx_stream_constellation_after_selected_rotation_{timestamp}",
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "constellation",
-                selected_frame_synched_signal,
-                title=f"RX Payload Constellation After Selected Rotation {timestamp}",
-                stem=f"rx_payload_constellation_after_selected_rotation_{timestamp}",
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "symbol_eye",
-                selected_frame_synched_signal.real,
-                title=f"RX Payload Symbol Eye I After Selected Rotation {timestamp}",
-                stem=f"rx_payload_symbol_eye_i_after_selected_rotation_{timestamp}",
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "symbol_eye",
-                selected_frame_synched_signal.imag,
-                title=f"RX Payload Symbol Eye Q After Selected Rotation {timestamp}",
-                stem=f"rx_payload_symbol_eye_q_after_selected_rotation_{timestamp}",
-            )
+            if debug_mode:
+                # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                eye_window = _extract_eye_window(
+                    filtered_signal,
+                    gold_index,
+                    EXPECTED_PAYLOAD_SYMBOLS,
+                    SAMPLES_PER_SYMBOL,
+                )
+                eye_offset = _best_eye_offset(eye_window, SAMPLES_PER_SYMBOL)
+                aligned_eye_window = eye_window[eye_offset:]
 
-            
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "psd",
+                    coarse_freq_adjusted,
+                    title=f"RX PSD After Coarse Frequency Correction {timestamp}",
+                    stem=f"rx_psd_after_coarse_frequency_correction_{timestamp}",
+                    sample_rate=float(config["modulation"]["sample_rate"]),
+                    center_freq=float(config["plotter"]["center_freq"]),
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "eye",
+                    aligned_eye_window,
+                    title=f"RX Eye Diagram After Matched Filter {timestamp}",
+                    stem=f"rx_eye_after_matched_filter_{timestamp}",
+                    samples_per_symbol=SAMPLES_PER_SYMBOL,
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "constellation",
+                    time_adjusted,
+                    title=f"RX Constellation After Gardner Timing Recovery {timestamp}",
+                    stem=f"rx_constellation_after_gardner_timing_{timestamp}",
+
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "constellation",
+                    selected_rotated_signal,
+                    title=f"RX Stream Constellation After Selected Rotation {timestamp}",
+                    stem=f"rx_stream_constellation_after_selected_rotation_{timestamp}",
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "constellation",
+                    selected_frame_synched_signal,
+                    title=f"RX Payload Constellation After Selected Rotation {timestamp}",
+                    stem=f"rx_payload_constellation_after_selected_rotation_{timestamp}",
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "symbol_eye",
+                    selected_frame_synched_signal.real,
+                    title=f"RX Payload Symbol Eye I After Selected Rotation {timestamp}",
+                    stem=f"rx_payload_symbol_eye_i_after_selected_rotation_{timestamp}",
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "symbol_eye",
+                    selected_frame_synched_signal.imag,
+                    title=f"RX Payload Symbol Eye Q After Selected Rotation {timestamp}",
+                    stem=f"rx_payload_symbol_eye_q_after_selected_rotation_{timestamp}",
+                )
+
             if received_datagram.get_msg_type == msgType.DATA:
                 logging.info(f"Received datagram: {received_datagram}")
                 try:
-                    ui_queue.put_nowait((received_datagram, False))  # Put received datagram in queue for TUI to process with "sent by us" flag set to False
+                    rx_queue.put(received_datagram)
+                    tui_refresh_event.set()  # Signal TUI to refresh display
                 except Full:
-                    logging.warning(f"User input queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
+                    logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
                     continue
 
                 if ACK_ENABLED:
@@ -299,23 +291,24 @@ def _rx_loop():
             # mark message as acknowledged if ACK received, so it won't be retransmitted.
             elif received_datagram.get_msg_type == msgType.ACK:
                 logging.info(f"Received ACK for msg_ID: {received_datagram.get_msg_id}")
-                if PENDING_TRACKING_ENABLED:
-                    _ack_received(int(received_datagram.get_msg_id))
-
-                # Put the ack in ui_queue for tui to process the ack as well.
                 try:
-                    ui_queue.put_nowait((received_datagram, False))
+                    rx_queue.put_nowait(received_datagram)
+                    tui_refresh_event.set()  # Signal TUI to refresh display
                 except Full:
-                    logging.error(f"UI queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
+                    logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
                     continue
 
-            # retransmit the previous sent message.h
+                if PENDING_TRACKING_ENABLED:
+                    _ack_received(int(received_datagram.get_msg_id))
+            
+
+            # retransmit the previous sent message.
             elif received_datagram.get_msg_type == msgType.NACK:
                 logging.info(f"Received NACK. Retransmitting oldest pending message if any.")
                 if RETRANSMIT_ENABLED:
                     _retransmit_oldest_pending()
+                
             else:
-                logging.warning(f"Received message with unknown type: {received_datagram.get_msg_type}")
                 raise ValueError("Unknown message type received.")
                 
         except ValueError as e:
@@ -323,7 +316,6 @@ def _rx_loop():
             if NACK_ENABLED:
                 nack_datagram = Datagram.as_nack()
                 queue_datagram(nack_datagram)
-            #time.sleep(0.05)  # Sleep briefly to avoid tight error loop
             continue
         except RuntimeError as e:
             logging.error(f"Runtime error in RX loop: {e}")
@@ -331,18 +323,18 @@ def _rx_loop():
             break
         except Exception as e:
             logging.error(f"Unexpected error in RX loop: {e}")
-            #time.sleep(0.05)  # Sleep briefly to avoid tight error loop
             continue
 
     logging.debug("RX loop stopped.")
 
 def _tx_loop():
     """Transmit loop - continuously check for outgoing messages and transmit them."""
+    global tx_queue, debug_mode
     logging.debug("TX loop started.")
 
     while not stop_event.is_set():
         try:
-            tx_datagram: Datagram = tx_queue.get(timeout=0.1) # Wait for message to send
+            tx_datagram: Datagram = tx_queue.get_nowait() # Wait for message to send
 
             fec_coded_data = fec_codec.encode(tx_datagram.pack())
             interleaved_data = interleaver.interleave(fec_coded_data)
@@ -381,27 +373,19 @@ def _tx_loop():
                     center_freq=float(config["plotter"]["center_freq"]),
                 )
                 
-
-
             # add guard symbols before and after the signal.
             signal_for_transmission = np.concatenate([GUARD_SYMBOLS, filtered_signal, GUARD_SYMBOLS])
             signal_for_transmission = _normalize_tx_burst(signal_for_transmission, TX_PEAK_SCALE)
-
-            sdr.send_signal(signal_for_transmission)
 
             if (
                 tx_datagram.get_msg_type == msgType.DATA
                 and PENDING_TRACKING_ENABLED
             ):
                 _track_sent_data(tx_datagram) 
-                try:
-                    ui_queue.put_nowait((tx_datagram, True))  # Put sent datagram in queue for TUI to process with "sent by us" flag set to True
-                except Full:
-                    logging.warning(f"User input queue is full. Dropping sent datagram ID {tx_datagram.get_msg_id} for TUI processing.")
-                    pass
-                
-            time.sleep(0.05)  # Sleep briefly to allow SDR to process transmission
 
+            sdr.send_signal(signal_for_transmission)
+
+            time.sleep(0.005)  # Sleep briefly to allow SDR to process transmission
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
         except Empty:
             continue  # No message to send, loop again
@@ -411,128 +395,141 @@ def _tx_loop():
             break
         except Exception as e:
             logging.error(f"Error: {e}")
-            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
 
     logging.debug("TX loop stopped.")
 
 def _tui_loop():
-    """TUI loop - continuously check for user input and enqueue messages to send."""
+    """
+        TUI loop - continuously check for user input and enqueue messages to send.
+        Only render if there are new messages or user input to process, to avoid unnecessary CPU usage and flickering.
+    """
+    global rx_queue
     logging.debug("TUI loop started.")
 
-    
-    render_interval = 1.0 / FRAMES_PER_SECOND
-    next_render_time = time.monotonic()
     tui.render_screen()  # Initial render of TUI
 
-
     while not stop_event.is_set():
- 
-        # consume all pending incoming datagrams
         try:
-            while True:
-                datagram, sent_by_us = ui_queue.get_nowait()
-                tui.add_message(datagram, sent_by_us=sent_by_us)
-        except Empty:
-            pass
 
-        # process completed user input lines
-        try:
-            while True:
-                user_input = user_input_queue.get_nowait()
+            if tui_refresh_event.is_set():
+                while not rx_queue.empty():
+                    try:
+                        received_datagram: Datagram = rx_queue.get_nowait()
+                        tui.add_message(received_datagram, sent_by_self=False)
+                        logging.debug(f"TUI processed received datagram ID: {received_datagram.get_msg_id}")
+                    except Empty:
+                        break  # No more messages to process
+                tui.render_screen()  # Update TUI display
+                tui_refresh_event.clear()  # Reset event
+
+            user_input = _poll_user_input()
+            if user_input is not None:
                 if user_input.lower() == "/quit":
-                    logging.info("User requested to quit. Stopping application.")
+                    logging.info("User requested to quit. Stopping application...")
                     stop_event.set()
                     break
                 elif user_input.startswith("/"):
                     logging.warning(f"Unknown command: {user_input}")
-                    continue
-                    
-                # send message as datagram
-                while len(user_input.encode('utf-8')) > PAYLOAD_SIZE:
-                    logging.warning("Input message is too long and will be truncated to fit payload size.")
-                    sliced_user_input = user_input[:PAYLOAD_SIZE ]
-                    datagram = Datagram.as_string(sliced_user_input, msg_type=msgType.DATA)
-                    queue_datagram(datagram)
-                    user_input = user_input[PAYLOAD_SIZE :]  # Remove the part that was sent
-                
-                # Send the remaining part of the message that fits in the payload
-                if user_input:
-                    datagram = Datagram.as_string(user_input, msg_type=msgType.DATA)
-                    queue_datagram(datagram)
+                    continue  # Ignore unknown commands
 
-        except Empty:
-            pass
+                sliced_user_input = _slice_text_to_payload_chunks(user_input, PAYLOAD_SIZE-1)
+                sent_any = False
 
-        # render TUI at fixed intervals
-        now = time.monotonic()
-        if now >= next_render_time:
-            tui.render_screen()
-            next_render_time = now + render_interval
+                for chunk in sliced_user_input:
+                    datagram = Datagram.as_string(chunk, msg_type=msgType.DATA)
+                    if queue_datagram(datagram):
+                        tui.add_message(datagram, sent_by_self=True)  # Add sent message to TUI display
+                        sent_any = True
+                    else:
+                        logging.error("Failed to queue message for transmission. Stopping further chunks.")
+                        break
+                    sent_any = True
+                if sent_any:
+                    tui.render_screen() 
 
-        time.sleep(0.01) # Sleep briefly to reduce CPU usage
+        except Exception as e:
+            logging.error(f"Error in TUI loop: {e}")
+            continue
+
+        time.sleep(0.5)  # Sleep briefly to reduce CPU usage.
     logging.debug("TUI loop stopped.")
 
-def _user_input_loop():
-    """
-        Blocking input loop: only enqueue complete lines of user input. 
-    """
-    global _input_buffer
+def _slice_text_to_payload_chunks(text: str, max_payload_bytes: int) -> list[str]:
+    """Split text into UTF-8-safe chunks, each <= max_payload_bytes."""
+    if max_payload_bytes <= 0:
+        raise ValueError("max_payload_bytes must be > 0")
 
-    logging.debug("User input loop started.")
-    old_settings = None
+    chunks: list[str] = []
+    current_chars: list[str] = []
+    current_bytes = 0
+
+    for ch in text:
+        ch_bytes = len(ch.encode("utf-8"))
+
+        # Defensive: skip impossible-to-fit single chars
+        if ch_bytes > max_payload_bytes:
+            logging.warning("Skipping character that exceeds payload byte limit.")
+            continue
+
+        if current_chars and (current_bytes + ch_bytes > max_payload_bytes):
+            chunks.append("".join(current_chars))
+            current_chars = [ch]
+            current_bytes = ch_bytes
+        else:
+            current_chars.append(ch)
+            current_bytes += ch_bytes
+
+    if current_chars:
+        chunks.append("".join(current_chars))
+
+    return chunks
+
+_windows_input_buffer = ""  # Buffer for accumulating user input on Windows, since msvcrt.getwch() reads one character at a time
+def _poll_user_input() -> str | None:
+    """Read one terminal line without blocking the TUI loop."""
+    global _windows_input_buffer
 
     if os.name != "nt":
-        # Set terminal to raw mode to allow non-blocking input
-        fd = sys.stdin.fileno()
-        old_settings = termios.tcgetattr(fd)
-        tty.setcbreak(fd)
+        ready_to_read, _, _ = select.select([sys.stdin], [], [], 0.1)
+        if ready_to_read:
+            return sys.stdin.readline().strip()
+        return None
 
-    try:
-        while not stop_event.is_set():
-            if os.name == "nt":
-                if not msvcrt.kbhit():
-                    time.sleep(0.05)
-                    continue
-                char = msvcrt.getwch()
-            else:
-                ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-                if not ready:
-                    continue
-                char = sys.stdin.read(1)
+    if not msvcrt.kbhit():
+        return None
 
-            if char in ("\r", "\n"):
-                line = _input_buffer.strip()
-                _input_buffer = ""
-                tui.set_current_input("")
-                if line:
-                    try:
-                        user_input_queue.put_nowait(line)
-                    except Full:
-                        logging.warning("User input queue full. Dropping line.")
-                continue
+    while msvcrt.kbhit():
+        char = msvcrt.getwch()
 
-            if char == "\x7f" or char == "\b":
-                _input_buffer = _input_buffer[:-1]
-            elif char == "\003":
-                stop_event.set()
-                break
-            elif char not in ("\x00", "\xe0"):
-                _input_buffer += char
+        if char in ("\r", "\n"):
+            completed = _windows_input_buffer
+            _windows_input_buffer = ""
+            print()
+            return completed.strip()
 
-            tui.set_current_input(_input_buffer)
-            time.sleep(0.01)  # Sleep briefly to reduce CPU usage
+        if char == "\003":
+            raise KeyboardInterrupt
 
-    finally:
-        if os.name != "nt" and old_settings is not None:
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+        if char == "\b":
+            if _windows_input_buffer:
+                _windows_input_buffer = _windows_input_buffer[:-1]
+                print("\b \b", end="", flush=True)
+            continue
 
-        logging.debug("User input loop stopped.")
+        if char in ("\x00", "\xe0"):
+            if msvcrt.kbhit():
+                msvcrt.getwch()
+            continue
 
+        _windows_input_buffer += char
+        print(char, end="", flush=True)
 
+    return None
         
 def _ack_timeout_loop():
     """ACK timeout loop - periodically check for pending ACKs and retransmit if necessary."""
+    global pending_ack
     logging.debug("ACK timeout loop started.")
 
     while not stop_event.is_set():
@@ -561,12 +558,7 @@ def _ack_timeout_loop():
                 pending_ack.pop(i)
 
         for msg_id, dgram, retry_count in to_retransmit:
-            try:
-                tx_queue.put_nowait(dgram)
-                logging.info(f"Timeout retransmit for datagram ID {msg_id} (retry {retry_count}).")
-            except Full:
-                logging.warning(f"TX queue full. Could not retransmit datagram ID {msg_id}.")
-
+            queue_datagram(dgram)
         time.sleep(max(0.05, ACK_TIMEOUT_ms / 1000.0 / 2.0))
 
     logging.debug("ACK timeout loop stopped.")
@@ -575,7 +567,7 @@ def _ack_timeout_loop():
 # ================= Start and Stop of sub threads =================
 def start():
     """Start the SDR Chat Application."""
-    global rx_thread, tx_thread, tui_thread, ack_timeout_thread, user_input_thread
+    global rx_thread, tx_thread, tui_thread, ack_timeout_thread
     
     if sdr.connect():  
         synchronizer.set_noise_floor(sdr.measure_noise_floor_dB())
@@ -588,12 +580,10 @@ def start():
         rx_thread = threading.Thread(target=_rx_loop, daemon=True, name="RX_Thread")
         tx_thread = threading.Thread(target=_tx_loop, daemon=True, name="TX_Thread")
         tui_thread = threading.Thread(target=_tui_loop, daemon=True, name="TUI_Thread")
-        user_input_thread = threading.Thread(target=_user_input_loop, daemon=True, name="User_Input_Thread")
-        ack_timeout_thread = threading.Thread(target=_ack_timeout_loop, daemon=True, name="ACK_Timeout_Thread")
+        ack_timeout_thread = threading.Thread(target=_ack_timeout_loop, daemon=True, name="ACK_Thread")
         rx_thread.start()
         tx_thread.start()
         tui_thread.start()
-        user_input_thread.start()
         ack_timeout_thread.start()
         return True
     
@@ -605,11 +595,11 @@ def start():
 
 def stop():
     """Stop the SDR Chat Application."""
-    global rx_thread, tx_thread, tui_thread, ack_timeout_thread, user_input_thread 
+    global rx_thread, tx_thread, tui_thread, ack_timeout_thread
     logging.info("Stopping SDR Chat Application...")
     stop_event.set()
 
-    for name, thread in (("RX", rx_thread), ("TX", tx_thread), ("TUI", tui_thread), ("ACK Timeout", ack_timeout_thread), ("User Input", user_input_thread)):
+    for name, thread in (("RX_Thread", rx_thread), ("TX_Thread", tx_thread), ("TUI_Thread", tui_thread), ("ACK_Thread", ack_timeout_thread)):
         if thread and thread.is_alive():
             try:
                 thread.join(timeout=2.0)
@@ -623,7 +613,6 @@ def stop():
     tx_thread = None
     tui_thread = None    
     ack_timeout_thread = None
-    user_input_thread = None
 
 def _signal_handler(signum, frame):
     """Handle termination signals for graceful shutdown."""
@@ -656,7 +645,7 @@ def _cleanup():
             logging.error(f"Error closing debug plot windows: {e}")
 
     # Drain queues
-    for q in (tx_queue, plot_data_queue, ui_queue, user_input_queue):
+    for q in (rx_queue, tx_queue, plot_data_queue):
         while not q.empty():
             try:
                 q.get_nowait()
@@ -698,6 +687,7 @@ def _cleanup():
 ##################################################################################
 def request_static_plot(plot_data: dict):
     """Thread-safe method to request a static plot from any thread."""
+    global debug_mode, static_plot_signaler
     if debug_mode and hasattr(static_plot_signaler, 'plot_requested'):
         static_plot_signaler.plot_requested.emit(plot_data)
 
@@ -710,9 +700,10 @@ def capture_plot_if_enabled(
     **extra,
 ):
     """Capture and save a plot if enabled in configuration."""
+    global static_plotter
     capture_cfg = config.get("plot_capture", {})
 
-    if not debug_mode or static_plotter is None:
+    if static_plotter is None:
         return
     if not capture_cfg.get("enabled", False):
         return
@@ -905,7 +896,7 @@ def calculate_expected_payload_symbols(
     logging.debug(f"Calculated expected payload symbols: {conv_output_bits // bps}")
     return conv_output_bits // bps
 
-
+    
 
 if __name__ == "__main__":
     # ================= read configuration file =================
@@ -931,6 +922,7 @@ if __name__ == "__main__":
     RETRANSMIT_ENABLED = bool(link_control_config.get("enable_retransmit", True))
     PENDING_TRACKING_ENABLED = bool(link_control_config.get("track_pending_data", True))
     EQUALIZER_ENABLED = bool(config["synchronization"].get("short_equalizer_enable", True))
+    PAYLOAD_SIZE = int(config['datagram']['payload_size'])
     # ================== Logging setup ==================
     log_dir = "log"
     os.makedirs(log_dir, exist_ok=True)
@@ -940,11 +932,17 @@ if __name__ == "__main__":
         level_name=get_configured_log_level(config),
         session_name="debug",
         log_file=debug_file,
-        console=bool(config['logging'].get('console', True)),
-        file_output=bool(config['logging'].get('file', True))
+        console=bool(config['logging']['log_to_console']),
+        file_output=bool(config['logging']['log_to_file']),
     )
 
-
+    try:
+        with open(log_file, 'a') as f:
+            f.write(f"\n\n--- New Chat Session Started at {datetime.now().time()} ---\n")
+    except Exception as e:
+        logging.error(f"Error initializing chat history log: {e}")
+        raise e
+    
     # ================== Signal handlers for graceful shutdown ==================
     atexit.register(_cleanup)
     signal.signal(signal.SIGINT, _signal_handler)
@@ -979,26 +977,22 @@ if __name__ == "__main__":
 
     # ================= Initialize additional constants =================
     EXPECTED_PAYLOAD_SYMBOLS = calculate_expected_payload_symbols(config)
-    PAYLOAD_SIZE = int(config['datagram']['payload_size'])
-    FRAMES_PER_SECOND = int(config['tui']['frames_per_second'])
 
     # ================== Threading and synchronization primitives ==================
     stop_event: threading.Event = threading.Event()
+    tui_refresh_event: threading.Event = threading.Event()
     rx_thread: threading.Thread = None
     tx_thread: threading.Thread = None
     tui_thread: threading.Thread = None
-    user_input_thread: threading.Thread = None
     ack_timeout_thread: threading.Thread = None 
 
     _cleaned_up = False
     _cleanup_lock = threading.Lock()
-   
+
     # ================== Message queues for inter-thread communication ==================
     tx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for outgoing messages to be transmitted by the TX thread
-    ui_queue: Queue[tuple[Datagram, bool]] = Queue(maxsize=int(config['radio']['queue_size']))  # Queue for user input lines read by the user input thread to be processed by the TUI thread
-    user_input_queue: Queue[str] = Queue(maxsize=64)  # Separate queue for raw user input lines from the user input thread to the TUI thread, to avoid mixing with datagram messages
-    _input_buffer: str = ""  # Buffer for accumulating user input characters until a full line is entered
-
+    rx_queue: Queue[Datagram] = Queue(maxsize=int(config['radio']['queue_size']))       # Queue for incoming messages received by the RX thread to be processed by the TUI thread
+    
     # List to track pending ACKs with retry counts and datagram info. 
     # (msg_id, retry_count, datagram, last_sent_ms)
     pending_ack: list[tuple[int, int, Datagram, float]] = []  
@@ -1056,7 +1050,7 @@ if __name__ == "__main__":
             else:
                 # Headless mode main loop
                 while not stop_event.is_set():
-                    time.sleep(0.5)
+                    time.sleep(1)
 
         except KeyboardInterrupt:
             logging.info("KeyboardInterrupt received. Stopping application...")
