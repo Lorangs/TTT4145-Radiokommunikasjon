@@ -35,7 +35,6 @@ from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
 NUMBER_OF_DATAGRAMS = 10
-TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
 
 SPINNER = ['|', '/', '-', '\\']
 
@@ -92,7 +91,7 @@ def queue_datagram(datagram: Datagram) -> bool:
     """Enqueue a datagram for transmission."""
     global tx_queue
     try: 
-        tx_queue.put_nowait(datagram)
+        tx_queue.put(datagram, timeout = 0.1)
         logging.info(f"Queued datagram ID {datagram.get_msg_id} for transmission.")
         return True
     except Full:
@@ -105,7 +104,7 @@ def queue_datagram(datagram: Datagram) -> bool:
 ##############################################################################################
 def _rx_loop():
     """Receive loop - continuously receive data from SDR and process it."""
-    global test_arr
+    global test_arr, stop_event, rx_queue
     logging.debug("RX loop started.")
 
     while not stop_event.is_set():
@@ -138,10 +137,6 @@ def _rx_loop():
                 fine_freq_adjusted,
                 gold_index,
             )
-
-            ### The following section attempts to decode the payload using the best rotation estimate from the gold code.
-            ### Falls back to trying other rotations if decoding fails. 
-            ### This is to handle cases where the gold-based rotation estimate is not perfect, which can happen at low SNR.
 
             received_datagram = None
 
@@ -206,6 +201,7 @@ def _rx_loop():
 
 def _tx_loop():
     """Transmit loop - continuously check for outgoing messages and transmit them."""
+    global tx_queue, stop_event, sdr
     logging.debug("TX loop started.")
 
     while not stop_event.is_set():
@@ -231,7 +227,6 @@ def _tx_loop():
             signal_for_transmission = _normalize_tx_burst(signal_for_transmission, TX_PEAK_SCALE)
 
             sdr.send_signal(signal_for_transmission)
-
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
 
             time.sleep(0.005)
@@ -250,6 +245,7 @@ def _tx_loop():
 
 def _tui_loop():
     """TUI loop - continuously refresh the terminal user interface."""
+    
     logging.debug("TUI loop started.")
     i = 0
     num_spinner_states = len(SPINNER)
@@ -270,7 +266,7 @@ def _tui_loop():
 # ================= Start and Stop of sub threads =================
 def start():
     """Start the SDR Chat Application."""
-    global rx_thread, tx_thread, tui_thread
+    global rx_thread, tx_thread, tui_thread, stop_event
     logging.info("Starting SDR Chat Application...")
 
     if sdr.connect():  
@@ -324,7 +320,7 @@ def stop():
 
 def finalize_result_once():
     """Calculate and log final results. Idempotent."""
-    global finalized
+    global finalized, rx_queue
 
     with finalize_lock:
         if finalized:
@@ -334,7 +330,7 @@ def finalize_result_once():
     received_datagrams = []
     while not rx_queue.empty():
         try:
-            received_datagram = rx_queue.get_nowait()
+            received_datagram = rx_queue.get(timeout=0.1)
             received_datagrams.append(received_datagram)
         except Empty:
             break
@@ -344,6 +340,7 @@ def finalize_result_once():
 
 def _signal_handler(signum, frame):
     """Handle termination signals for graceful shutdown."""
+    global stop_event, tx_queue
     while tx_queue.empty() is False:
         time.sleep(0.1)  # Wait for TX queue to drain before finalizing results
 
@@ -353,7 +350,7 @@ def _signal_handler(signum, frame):
 
 def _cleanup():
     """Clean up resources safely. Idempotent."""
-    global _cleaned_up
+    global _cleaned_up, rx_queue, sdr
 
     lock = globals().get("_cleanup_lock", None)
     if lock is None:
@@ -544,8 +541,8 @@ if __name__ == "__main__":
         level_name=get_configured_log_level(config),
         session_name="debug",
         log_file=debug_file,
-        console=True,
-        file_output=True,
+        console=bool(config["logging"].get("console", True)),
+        file_output=bool(config["logging"].get("file", True)),
     )
 
     # ================== Signal handlers for graceful shutdown ==================
@@ -597,7 +594,7 @@ if __name__ == "__main__":
                 
         except KeyboardInterrupt:
             while tx_queue.empty() is False:
-                time.sleep(2)  # Wait for TX queue to drain before finalizing results
+                time.sleep(1)  # Wait for TX queue to drain before finalizing results
 
             finalize_result_once()
             stop_event.set()

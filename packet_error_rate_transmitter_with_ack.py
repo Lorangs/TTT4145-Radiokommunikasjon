@@ -34,8 +34,7 @@ from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
 
-NUMBER_OF_DATAGRAMS = 100
-TEST_BER_OR_DGRM = False  # Set to True to test bit error rate, False to test datagram error rate
+NUMBER_OF_DATAGRAMS = 10
 
 STAGES = (
     "Generating Datagrams",
@@ -57,6 +56,7 @@ def _inc_tx_sent() -> None:
 
 
 def _tx_progress_snapshot() -> tuple[int, int]:
+    global tx_sent_messages, tx_total_messages
     with progress_lock:
         return tx_sent_messages, tx_total_messages
 
@@ -122,7 +122,7 @@ def queue_datagram(datagram: Datagram) -> None:
     """Enqueue a datagram for transmission."""
     global tx_queue
     try: 
-        tx_queue.put_nowait(datagram)
+        tx_queue.put(datagram, timeout=0.1)
         logging.info(f"Queued datagram ID {datagram.get_msg_id} for transmission.")
     except Full:
         logging.error(f"Failed to queue datagram ID {datagram.get_msg_id}. TX queue is full.")
@@ -142,6 +142,7 @@ def _find_pending_payload(payload: npt.NDArray[np.uint8]) -> int | None:
 
 def _track_sent_data(datagram: Datagram) -> None:
     """Track sent DATA datagrams for potential retransmission if ACK is not received."""
+    global pending_ack
     msg_id = int(datagram.get_msg_id)
     now_ms = time.time() * 1000.0
     with pending_lock:
@@ -202,12 +203,6 @@ def _rx_loop():
                 gold_index,
             )
 
-    
-                
-            ### The following section attempts to decode the payload using the best rotation estimate from the gold code.
-            ### Falls back to trying other rotations if decoding fails. 
-            ### This is to handle cases where the gold-based rotation estimate is not perfect, which can happen at low SNR.
-
             received_datagram = None
 
             def apply_equalizer(rotated_signal: np.ndarray) -> np.ndarray:
@@ -258,7 +253,6 @@ def _rx_loop():
 
         except ValueError as e:
             logging.warning(f"Did not receive valid signal: {e}")
-            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
         except RuntimeError as e:
             logging.error(f"Runtime error in RX loop: {e}")
@@ -266,7 +260,6 @@ def _rx_loop():
             break
         except Exception as e:
             logging.error(f"Unexpected error in RX loop: {e}")
-            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
 
     logging.debug("RX loop stopped.")
@@ -277,7 +270,7 @@ def _tx_loop():
 
     while not stop_event.is_set():
         try:
-            tx_datagram: Datagram = tx_queue.get(timeout=0.1) # Wait for message to send
+            tx_datagram: Datagram = tx_queue.get_nowait() # Wait for message to send
 
             fec_coded_data = fec_codec.encode(tx_datagram.pack())
             interleaved_data = interleaver.interleave(fec_coded_data)
@@ -310,7 +303,7 @@ def _tx_loop():
 
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
 
-            time.sleep(0.05)
+            time.sleep(0.005)
         except Empty:
             continue  # No message to send, loop again
         except RuntimeError as e:
@@ -319,7 +312,6 @@ def _tx_loop():
             break
         except Exception as e:
             logging.error(f"Error: {e}")
-            time.sleep(0.05)  # Sleep briefly to avoid tight error loop
             continue
 
     logging.debug("TX loop stopped.")
@@ -371,7 +363,7 @@ def _tui_loop():
             sys.stdout.write(f"Transmitted: {_format_progress_bar(sent, total)}\n")
 
             sys.stdout.flush()
-            time.sleep(0.12)
+            time.sleep(0.2)
     finally:
         sys.stdout.write("\033[2J\033[H")
         sys.stdout.flush()
@@ -380,18 +372,24 @@ def _tui_loop():
 
 def _ack_timeout_loop():
     """ACK timeout loop - periodically check for pending ACKs and retransmit if necessary."""
+    global pending_ack, all_enqueued
     logging.debug("ACK timeout loop started.")
 
-    if not RETRANSMIT_ENABLED:
-        logging.debug("Retransmission is disabled. ACK timeout loop will not run.")
-        return
-
     while not stop_event.is_set():
+        if not RETRANSMIT_ENABLED:
+            time.sleep(1.0)  # Sleep longer if retransmission is disabled, since we won't be doing anything in this loop
+            continue
+        
         now_ms = time.time() * 1000.0
         to_retransmit: list[tuple[int, Datagram, int]] = []
         to_remove: list[int] = []
 
         with pending_lock:
+            if all_enqueued.is_set() and len(pending_ack) == 0:
+                logging.info("All datagrams acknowledged. Stopping ACK timeout loop.")
+                stop_event.set()  # Trigger shutdown of the application
+                break
+
             for i, (msg_id, retries, dgram, last_sent_ms) in enumerate(pending_ack):
                 if (now_ms - last_sent_ms) <= ACK_TIMEOUT_ms:
                     continue
@@ -408,13 +406,10 @@ def _ack_timeout_loop():
                 pending_ack.pop(i)
 
         for msg_id, dgram, retry_count in to_retransmit:
-            try:
-                tx_queue.put_nowait(dgram)
-                logging.info(f"Timeout retransmit for datagram ID {msg_id} (retry {retry_count}).")
-            except Full:
-                logging.warning(f"TX queue full. Could not retransmit datagram ID {msg_id}.")
-
-        time.sleep(max(0.05, ACK_TIMEOUT_ms / 1000.0 / 2.0))
+            queue_datagram(dgram)
+            logging.info(f"Timeout retransmit for datagram ID {msg_id} (retry {retry_count}).")
+ 
+        time.sleep(0.01)
 
     logging.debug("ACK timeout loop stopped.")
 
@@ -422,10 +417,8 @@ def _ack_timeout_loop():
 # ================= Start and Stop of sub threads =================
 def start():
     """Start the SDR Chat Application."""
-    global  tx_thread, tui_thread, rx_thread
+    global  tx_thread, tui_thread, rx_thread, ack_timeout_thread
     
-
-
     if sdr.connect():  
         synchronizer.set_noise_floor(sdr.measure_noise_floor_dB())
     else:
@@ -438,7 +431,7 @@ def start():
         tx_thread = threading.Thread(target=_tx_loop, daemon=True, name="TX_Thread")
         rx_thread = threading.Thread(target=_rx_loop, daemon=True, name="RX_Thread")
         tui_thread = threading.Thread(target=_tui_loop, daemon=True, name="TUI_Thread")
-        ack_timeout_thread = threading.Thread(target=_ack_timeout_loop, daemon=True, name="ACK_Timeout_Thread")
+        ack_timeout_thread = threading.Thread(target=_ack_timeout_loop, daemon=True, name="ACK_Thread")
 
         tx_thread.start()
         rx_thread.start()
@@ -453,11 +446,11 @@ def start():
 
 def stop():
     """Stop the SDR Chat Application."""
-    global tx_thread, tui_thread, ack_timeout_thread
+    global tx_thread, tui_thread, ack_timeout_thread, rx_thread
     logging.info("Stopping SDR Chat Application...")
     stop_event.set()
 
-    for name, thread in (("TX", tx_thread), ("TUI", tui_thread), ("RX", rx_thread)):
+    for name, thread in (("TX_Thread", tx_thread), ("TUI_Thread", tui_thread), ("RX_Thread", rx_thread), ("ACK_Thread", ack_timeout_thread)):
         if thread and thread.is_alive():
             try:
                 thread.join(timeout=2.0)
@@ -471,6 +464,7 @@ def stop():
     tx_thread = None  
     tui_thread = None
     rx_thread = None
+    ack_timeout_thread = None    
 
 
 def _signal_handler(signum, frame):
@@ -698,8 +692,8 @@ if __name__ == "__main__":
         level_name=get_configured_log_level(config),
         session_name="debug",
         log_file=debug_file,
-        console=False,
-        file_output=True,
+        console=bool(config["logging"].get("console", True)),
+        file_output=bool(config["logging"].get("file", True))
     )
 
     try:
@@ -741,6 +735,7 @@ if __name__ == "__main__":
 
     pending_lock = threading.Lock()
     pending_ack: list[tuple[int, int, Datagram, float]] = []  # List of pending ACKs being tracked for retransmission, each entry is a tuple of (msg_id
+    all_enqueued = threading.Event()  # Event to signal that all datagrams have been enqueued for transmission, used to trigger finalization of results after shutdown
 
     progress_lock = threading.Lock()
     tx_total_messages = 0
@@ -754,9 +749,10 @@ if __name__ == "__main__":
 
     # ================== Message queues for inter-thread communication ==================
     tx_queue: Queue[Datagram] = Queue(maxsize=64)       # Queue for outgoing messages to be transmitted by the TX thread
-    rx_queue: Queue[Datagram] = Queue(maxsize=NUMBER_OF_DATAGRAMS)       # Queue for incoming messages to be received by the RX thread
+    rx_queue: Queue[Datagram] = Queue(maxsize=64)       # Queue for incoming messages to be received by the RX thread
 
     # ======================= start application =========================
+    all_enqueued.clear()  # Clear the event before starting to enqueue datagrams
     if start():
         logging.info("SDR Chat Application is running. Press Ctrl+C to stop.")
 
@@ -768,24 +764,17 @@ if __name__ == "__main__":
 
             _set_stage("Transmitting Datagrams")
             
-            i = 0   
 
-            while test_arr or (not rx_queue.empty()):
+            # transmit a datagram every half second
+            for i, datagram in enumerate(test_arr):
                 if stop_event.is_set():
                     break
-                try:
-                    if tx_queue.qsize() < 10:
-                        # queue 10 datagrams at a time to avoid overwhelming the TX queue, and allow for retransmitting
-                        for _ in range(min(10, len(test_arr))):
-                            dgram = test_arr[i]     # get the next datagram to send
-                            queue_datagram(dgram)
-                            i += 1
-                except Full:
-                    logging.warning("TX queue is full. Waiting to enqueue datagram...")
-                    time.sleep(0.1)  # Wait briefly before trying to enqueue again
-                    continue
+                queue_datagram(datagram)
+                time.sleep(0.5)
+            all_enqueued.set()  # Signal that all datagrams have been enqueued
+            logging.debug("All datagrams have been enqueued for transmission.")
 
-            while (not tx_queue.empty()) and (not stop_event.is_set()):
+            while not stop_event.is_set():
                 time.sleep(1)  # Wait for all messages to be transmitted
   
             time.sleep(2)
@@ -794,14 +783,16 @@ if __name__ == "__main__":
             
         except KeyboardInterrupt:
             logging.info("KeyboardInterrupt received. Stopping application...")
-            stop_event.set()
+            _cleanup()
+            sys.exit(2)
 
         finally:
             _cleanup()
+            sys.exit(1)
 
     else:
         logging.error("Failed to start SDR Chat Application.")
-        stop()
+        _cleanup()
         sys.exit(1)
 
     sys.exit(0)
