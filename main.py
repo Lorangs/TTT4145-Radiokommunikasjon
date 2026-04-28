@@ -335,6 +335,7 @@ def _rx_loop():
 
 def _tx_loop():
     """Transmit loop - continuously check for outgoing messages and transmit them."""
+    global tx_queue
     logging.debug("TX loop started.")
 
     while not stop_event.is_set():
@@ -378,22 +379,19 @@ def _tx_loop():
                     center_freq=float(config["plotter"]["center_freq"]),
                 )
                 
-
-
             # add guard symbols before and after the signal.
             signal_for_transmission = np.concatenate([GUARD_SYMBOLS, filtered_signal, GUARD_SYMBOLS])
             signal_for_transmission = _normalize_tx_burst(signal_for_transmission, TX_PEAK_SCALE)
-
-            sdr.send_signal(signal_for_transmission)
 
             if (
                 tx_datagram.get_msg_type == msgType.DATA
                 and PENDING_TRACKING_ENABLED
             ):
                 _track_sent_data(tx_datagram) 
-            
-            time.sleep(0.05)  # Sleep briefly to allow SDR to process transmission
 
+            sdr.send_signal(signal_for_transmission)
+
+            time.sleep(0.005)  # Sleep briefly to allow SDR to process transmission
             logging.info(f"Transmitted datagram: {tx_datagram.get_msg_id}")
         except Empty:
             continue  # No message to send, loop again
@@ -403,7 +401,6 @@ def _tx_loop():
             break
         except Exception as e:
             logging.error(f"Error: {e}")
-            time.sleep(0.1)  # Sleep briefly to avoid tight error loop
             continue
 
     logging.debug("TX loop stopped.")
@@ -413,6 +410,7 @@ def _tui_loop():
         TUI loop - continuously check for user input and enqueue messages to send.
         Only render if there are new messages or user input to process, to avoid unnecessary CPU usage and flickering.
     """
+    global rx_queue
     logging.debug("TUI loop started.")
 
     tui.render_screen()  # Initial render of TUI
@@ -537,6 +535,7 @@ def _poll_user_input() -> str | None:
         
 def _ack_timeout_loop():
     """ACK timeout loop - periodically check for pending ACKs and retransmit if necessary."""
+    global pending_ack
     logging.debug("ACK timeout loop started.")
 
     while not stop_event.is_set():
