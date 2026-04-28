@@ -101,6 +101,7 @@ def _retransmit_oldest_pending() -> None:
 ##############################################################################################
 def _rx_loop():
     """Receive loop - continuously receive data from SDR and process it."""
+    global rx_queue, plot_data_queue
     logging.debug("RX loop started.")
 
     while not stop_event.is_set():
@@ -298,7 +299,7 @@ def _rx_loop():
                 if PENDING_TRACKING_ENABLED:
                     _ack_received(int(received_datagram.get_msg_id))
                 try:
-                    rx_queue.put(received_datagram)
+                    rx_queue.put_nowait(received_datagram)
                     tui_refresh_event.set()  # Signal TUI to refresh display
                 except Full:
                     logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
@@ -564,12 +565,7 @@ def _ack_timeout_loop():
                 pending_ack.pop(i)
 
         for msg_id, dgram, retry_count in to_retransmit:
-            try:
-                tx_queue.put_nowait(dgram)
-                logging.info(f"Timeout retransmit for datagram ID {msg_id} (retry {retry_count}).")
-            except Full:
-                logging.warning(f"TX queue full. Could not retransmit datagram ID {msg_id}.")
-
+            queue_datagram(dgram)
         time.sleep(max(0.05, ACK_TIMEOUT_ms / 1000.0 / 2.0))
 
     logging.debug("ACK timeout loop stopped.")
@@ -591,7 +587,7 @@ def start():
         rx_thread = threading.Thread(target=_rx_loop, daemon=True, name="RX_Thread")
         tx_thread = threading.Thread(target=_tx_loop, daemon=True, name="TX_Thread")
         tui_thread = threading.Thread(target=_tui_loop, daemon=True, name="TUI_Thread")
-        ack_timeout_thread = threading.Thread(target=_ack_timeout_loop, daemon=True, name="ACK_Timeout_Thread")
+        ack_timeout_thread = threading.Thread(target=_ack_timeout_loop, daemon=True, name="ACK_Thread")
         rx_thread.start()
         tx_thread.start()
         tui_thread.start()
@@ -610,7 +606,7 @@ def stop():
     logging.info("Stopping SDR Chat Application...")
     stop_event.set()
 
-    for name, thread in (("RX", rx_thread), ("TX", tx_thread), ("TUI", tui_thread), ("ACK Timeout", ack_timeout_thread)):
+    for name, thread in (("RX_Thread", rx_thread), ("TX_Thread", tx_thread), ("TUI_Thread", tui_thread), ("ACK_Thread", ack_timeout_thread)):
         if thread and thread.is_alive():
             try:
                 thread.join(timeout=2.0)
@@ -906,8 +902,6 @@ def calculate_expected_payload_symbols(
     return conv_output_bits // bps
 
     
-
-
 
 if __name__ == "__main__":
     # ================= read configuration file =================
