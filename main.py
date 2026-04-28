@@ -51,6 +51,7 @@ def queue_datagram(datagram: Datagram) -> bool:
         return False
 
 def _find_pending_index(msg_id: int) -> int | None:
+    global pending_ack
     for i, (pending_msg_id, _, _, _) in enumerate(pending_ack):
         if pending_msg_id == msg_id:
             return i
@@ -58,6 +59,7 @@ def _find_pending_index(msg_id: int) -> int | None:
 
 def _track_sent_data(datagram: Datagram) -> None:
     """Track sent DATA datagrams for potential retransmission if ACK is not received."""
+    global pending_ack
     msg_id = int(datagram.get_msg_id)
     now_ms = time.time() * 1000.0
     with pending_lock:
@@ -70,6 +72,7 @@ def _track_sent_data(datagram: Datagram) -> None:
 
 def _ack_received(msg_id: int) -> None:
     """Handle received ACK by removing the corresponding datagram from pending_ack."""
+    global pending_ack
     with pending_lock:
         idx = _find_pending_index(msg_id)
         if idx is not None:
@@ -78,6 +81,7 @@ def _ack_received(msg_id: int) -> None:
 
 def _retransmit_oldest_pending() -> None:
     """Retransmit the oldest pending datagram if any exist and have not exceeded max retries."""
+    global pending_ack
     with pending_lock:
         if not pending_ack:
             return
@@ -101,7 +105,7 @@ def _retransmit_oldest_pending() -> None:
 ##############################################################################################
 def _rx_loop():
     """Receive loop - continuously receive data from SDR and process it."""
-    global rx_queue, plot_data_queue
+    global rx_queue, plot_data_queue, debug_mode, plotter
     logging.debug("RX loop started.")
 
     while not stop_event.is_set():
@@ -111,27 +115,16 @@ def _rx_loop():
             coarse_freq_adjusted = synchronizer.coarse_frequenzy_synchronization(received_signal)
             if coarse_freq_adjusted is None:
                 continue    # skip if signal is too weak to process
-            #logging.debug("Signal detected above noise floor. Proceeding with synchronization and decoding.")
 
             padded_signal = matched_filter.pad_signal_front_and_back(coarse_freq_adjusted)  
             filtered_signal = matched_filter.apply_filter(padded_signal)
-            #logging.debug("Applied matched filter to received signal.")
-
-            #normalized_matched_filtered = synchronizer.normalize_matched_filter_output(filtered_signal)
-            #logging.debug("Normalized matched filter output for synchronization.")
-
             time_adjusted = synchronizer.gardner_timing_synchronization(filtered_signal)
-            #logging.debug("Performed Gardner timing synchronization on received signal.")
-
             fine_freq_adjusted = synchronizer.fine_frequenzy_synchronization(time_adjusted)
-            #logging.debug("Performed fine frequency synchronization on received signal.")
-
             gold_index, _ = gold_detector.detect_with_rotation(
                 fine_freq_adjusted,
                 EXPECTED_PAYLOAD_SYMBOLS,
             )
 
-            
             # === Send data to plotter if debug mode is enabled ===
             if debug_mode and plotter is not None:
                 try:
@@ -157,43 +150,7 @@ def _rx_loop():
                 fine_freq_adjusted,
                 gold_index,
             )
-
-            # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            eye_window = _extract_eye_window(
-                filtered_signal,
-                gold_index,
-                EXPECTED_PAYLOAD_SYMBOLS,
-                SAMPLES_PER_SYMBOL,
-            )
-            eye_offset = _best_eye_offset(eye_window, SAMPLES_PER_SYMBOL)
-            aligned_eye_window = eye_window[eye_offset:]
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "psd",
-                coarse_freq_adjusted,
-                title=f"RX PSD After Coarse Frequency Correction {timestamp}",
-                stem=f"rx_psd_after_coarse_frequency_correction_{timestamp}",
-                sample_rate=float(config["modulation"]["sample_rate"]),
-                center_freq=float(config["plotter"]["center_freq"]),
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "eye",
-                aligned_eye_window,
-                title=f"RX Eye Diagram After Matched Filter {timestamp}",
-                stem=f"rx_eye_after_matched_filter_{timestamp}",
-                samples_per_symbol=SAMPLES_PER_SYMBOL,
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "constellation",
-                time_adjusted,
-                title=f"RX Constellation After Gardner Timing Recovery {timestamp}",
-                stem=f"rx_constellation_after_gardner_timing_{timestamp}",
-
-            )
-                
+          
             # Try the Gold-based rotation first, then fall back to the other
             # allowed constellation rotations if decode fails.
             selected_rotated_signal = None
@@ -252,58 +209,97 @@ def _rx_loop():
             if received_datagram is None:
                 continue
 
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "constellation",
-                selected_rotated_signal,
-                title=f"RX Stream Constellation After Selected Rotation {timestamp}",
-                stem=f"rx_stream_constellation_after_selected_rotation_{timestamp}",
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "constellation",
-                selected_frame_synched_signal,
-                title=f"RX Payload Constellation After Selected Rotation {timestamp}",
-                stem=f"rx_payload_constellation_after_selected_rotation_{timestamp}",
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "symbol_eye",
-                selected_frame_synched_signal.real,
-                title=f"RX Payload Symbol Eye I After Selected Rotation {timestamp}",
-                stem=f"rx_payload_symbol_eye_i_after_selected_rotation_{timestamp}",
-            )
-            capture_plot_if_enabled(
-                "rx_gold_detect",
-                "symbol_eye",
-                selected_frame_synched_signal.imag,
-                title=f"RX Payload Symbol Eye Q After Selected Rotation {timestamp}",
-                stem=f"rx_payload_symbol_eye_q_after_selected_rotation_{timestamp}",
-            )
+            if debug_mode:
+                # === Constellation, PSD, and Eye Diagram plots when debug is enabled and gold code is detected ===   
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                eye_window = _extract_eye_window(
+                    filtered_signal,
+                    gold_index,
+                    EXPECTED_PAYLOAD_SYMBOLS,
+                    SAMPLES_PER_SYMBOL,
+                )
+                eye_offset = _best_eye_offset(eye_window, SAMPLES_PER_SYMBOL)
+                aligned_eye_window = eye_window[eye_offset:]
+
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "psd",
+                    coarse_freq_adjusted,
+                    title=f"RX PSD After Coarse Frequency Correction {timestamp}",
+                    stem=f"rx_psd_after_coarse_frequency_correction_{timestamp}",
+                    sample_rate=float(config["modulation"]["sample_rate"]),
+                    center_freq=float(config["plotter"]["center_freq"]),
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "eye",
+                    aligned_eye_window,
+                    title=f"RX Eye Diagram After Matched Filter {timestamp}",
+                    stem=f"rx_eye_after_matched_filter_{timestamp}",
+                    samples_per_symbol=SAMPLES_PER_SYMBOL,
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "constellation",
+                    time_adjusted,
+                    title=f"RX Constellation After Gardner Timing Recovery {timestamp}",
+                    stem=f"rx_constellation_after_gardner_timing_{timestamp}",
+
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "constellation",
+                    selected_rotated_signal,
+                    title=f"RX Stream Constellation After Selected Rotation {timestamp}",
+                    stem=f"rx_stream_constellation_after_selected_rotation_{timestamp}",
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "constellation",
+                    selected_frame_synched_signal,
+                    title=f"RX Payload Constellation After Selected Rotation {timestamp}",
+                    stem=f"rx_payload_constellation_after_selected_rotation_{timestamp}",
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "symbol_eye",
+                    selected_frame_synched_signal.real,
+                    title=f"RX Payload Symbol Eye I After Selected Rotation {timestamp}",
+                    stem=f"rx_payload_symbol_eye_i_after_selected_rotation_{timestamp}",
+                )
+                capture_plot_if_enabled(
+                    "rx_gold_detect",
+                    "symbol_eye",
+                    selected_frame_synched_signal.imag,
+                    title=f"RX Payload Symbol Eye Q After Selected Rotation {timestamp}",
+                    stem=f"rx_payload_symbol_eye_q_after_selected_rotation_{timestamp}",
+                )
 
             if received_datagram.get_msg_type == msgType.DATA:
                 logging.info(f"Received datagram: {received_datagram}")
-                if ACK_ENABLED:
-                    ack_datagram = Datagram.as_ack(msg_id=received_datagram.get_msg_id)
-                    queue_datagram(ack_datagram)
                 try:
                     rx_queue.put(received_datagram)
                     tui_refresh_event.set()  # Signal TUI to refresh display
                 except Full:
                     logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
                     continue
+
+                if ACK_ENABLED:
+                    ack_datagram = Datagram.as_ack(msg_id=received_datagram.get_msg_id)
+                    queue_datagram(ack_datagram)
       
             # mark message as acknowledged if ACK received, so it won't be retransmitted.
             elif received_datagram.get_msg_type == msgType.ACK:
                 logging.info(f"Received ACK for msg_ID: {received_datagram.get_msg_id}")
-                if PENDING_TRACKING_ENABLED:
-                    _ack_received(int(received_datagram.get_msg_id))
                 try:
                     rx_queue.put_nowait(received_datagram)
                     tui_refresh_event.set()  # Signal TUI to refresh display
                 except Full:
                     logging.error(f"RX queue is full. Dropping received datagram ID {received_datagram.get_msg_id}.")
                     continue
+
+                if PENDING_TRACKING_ENABLED:
+                    _ack_received(int(received_datagram.get_msg_id))
             
 
             # retransmit the previous sent message.
@@ -320,7 +316,6 @@ def _rx_loop():
             if NACK_ENABLED:
                 nack_datagram = Datagram.as_nack()
                 queue_datagram(nack_datagram)
-            #time.sleep(0.05)  # Sleep briefly to avoid tight error loop
             continue
         except RuntimeError as e:
             logging.error(f"Runtime error in RX loop: {e}")
@@ -328,19 +323,18 @@ def _rx_loop():
             break
         except Exception as e:
             logging.error(f"Unexpected error in RX loop: {e}")
-            #time.sleep(0.05)  # Sleep briefly to avoid tight error loop
             continue
 
     logging.debug("RX loop stopped.")
 
 def _tx_loop():
     """Transmit loop - continuously check for outgoing messages and transmit them."""
-    global tx_queue
+    global tx_queue, debug_mode
     logging.debug("TX loop started.")
 
     while not stop_event.is_set():
         try:
-            tx_datagram: Datagram = tx_queue.get(timeout=0.1) # Wait for message to send
+            tx_datagram: Datagram = tx_queue.get_nowait() # Wait for message to send
 
             fec_coded_data = fec_codec.encode(tx_datagram.pack())
             interleaved_data = interleaver.interleave(fec_coded_data)
@@ -693,6 +687,7 @@ def _cleanup():
 ##################################################################################
 def request_static_plot(plot_data: dict):
     """Thread-safe method to request a static plot from any thread."""
+    global debug_mode, static_plot_signaler
     if debug_mode and hasattr(static_plot_signaler, 'plot_requested'):
         static_plot_signaler.plot_requested.emit(plot_data)
 
@@ -705,9 +700,10 @@ def capture_plot_if_enabled(
     **extra,
 ):
     """Capture and save a plot if enabled in configuration."""
+    global static_plotter
     capture_cfg = config.get("plot_capture", {})
 
-    if not debug_mode or static_plotter is None:
+    if static_plotter is None:
         return
     if not capture_cfg.get("enabled", False):
         return
