@@ -6,7 +6,6 @@ import time
 import logging
 import select
 import threading
-from copy import deepcopy
 from queue import Queue, Empty, Full
 from datetime import datetime
 from typing import Dict
@@ -38,25 +37,6 @@ from project_logger import configure_project_logging, get_configured_log_level
 NUMBER_OF_DATAGRAMS = 10
 
 SPINNER = ['|', '/', '-', '\\']
-
-
-def _configure_ack_harness_role(config: dict, role: str) -> dict:
-    """Return a config view with TX/RX carriers mapped for the ACK test role."""
-    configured = deepcopy(config)
-    tx_carrier = float(configured["transmitter"]["tx_carrier"])
-    rx_carrier = float(configured["receiver"]["rx_carrier"])
-
-    if role == "initiator":
-        configured["transmitter"]["tx_carrier"] = tx_carrier
-        configured["receiver"]["rx_carrier"] = rx_carrier
-    elif role == "responder":
-        configured["transmitter"]["tx_carrier"] = rx_carrier
-        configured["receiver"]["rx_carrier"] = tx_carrier
-    else:
-        raise ValueError(f"Unsupported ACK harness role: {role}")
-
-    configured["ack_harness_role"] = role
-    return configured
 
 
 def generate_test_datagrams(num_datagrams: int) -> list[Datagram]:
@@ -119,85 +99,6 @@ def queue_datagram(datagram: Datagram) -> bool:
         return False
 
 
-def _log_gold_success(gold_index: int, best_rotation: int) -> None:
-    global gold_success_count
-    with decode_stats_lock:
-        gold_success_count += 1
-        success = gold_success_count
-        fail = gold_fail_count
-    logging.debug(
-        "Gold success: success=%s fail=%s gold_index=%s best_rotation=%s",
-        success,
-        fail,
-        gold_index,
-        best_rotation,
-    )
-
-
-def _log_gold_fail(reason: str, gold_index: int | None = None) -> None:
-    global gold_fail_count
-    with decode_stats_lock:
-        gold_fail_count += 1
-        success = gold_success_count
-        fail = gold_fail_count
-    if gold_index is None:
-        logging.debug("Gold fail: success=%s fail=%s reason=%s", success, fail, reason)
-        return
-    logging.debug(
-        "Gold fail: success=%s fail=%s reason=%s gold_index=%s",
-        success,
-        fail,
-        reason,
-        gold_index,
-    )
-
-
-def _log_rs_success(gold_index: int, rotation: int, decoded_bytes: int) -> None:
-    global rs_success_count
-    with decode_stats_lock:
-        rs_success_count += 1
-        success = rs_success_count
-        fail = rs_fail_count
-    logging.debug(
-        "RS success: success=%s fail=%s gold_index=%s rotation=%s decoded_bytes=%s",
-        success,
-        fail,
-        gold_index,
-        rotation,
-        decoded_bytes,
-    )
-
-
-def _log_rs_fail(gold_index: int, rotation: int, error: Exception) -> None:
-    global rs_fail_count
-    with decode_stats_lock:
-        rs_fail_count += 1
-        success = rs_success_count
-        fail = rs_fail_count
-    logging.debug(
-        "RS fail: success=%s fail=%s gold_index=%s rotation=%s error=%s",
-        success,
-        fail,
-        gold_index,
-        rotation,
-        error,
-    )
-
-
-def _log_decode_stage_summary() -> None:
-    global decode_summary_logged
-    with decode_summary_lock:
-        if decode_summary_logged:
-            return
-        decode_summary_logged = True
-        gold_success = gold_success_count
-        gold_fail = gold_fail_count
-        rs_success = rs_success_count
-        rs_fail = rs_fail_count
-    logging.info("Gold summary: success=%s fail=%s", gold_success, gold_fail)
-    logging.info("RS summary: success=%s fail=%s", rs_success, rs_fail)
-
-
 ##############################################################################################
 # ================= Callback loops for threads =================
 ##############################################################################################
@@ -224,20 +125,18 @@ def _rx_loop():
             )
 
             if gold_index is None:
-                _log_gold_fail("no_candidate")
+                # logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
                 continue   # skip if gold code is not detected, likely not a valid signal to process
             if not gold_detector.candidate_fits_frame(
                 len(fine_freq_adjusted), 
                 gold_index,
                 EXPECTED_PAYLOAD_SYMBOLS
             ):
-                _log_gold_fail("frame_bounds", gold_index)
                 continue
             best_rotation = gold_detector.estimate_rotation_from_gold(
                 fine_freq_adjusted,
                 gold_index,
             )
-            _log_gold_success(gold_index, best_rotation)
 
             received_datagram = None
 
@@ -268,12 +167,10 @@ def _rx_loop():
                     descrambled_bytes = scrambler.apply(conv_decoded_bytes)
                     interleaved_bytes = interleaver.deinterleave(descrambled_bytes)
                     fec_decoded_bits = fec_codec.decode(interleaved_bytes)
-                    _log_rs_success(gold_index, rotation, len(fec_decoded_bits))
                     received_datagram = Datagram.unpack(fec_decoded_bits)
 
                     break
                 except (ValueError, RuntimeError) as e:
-                    _log_rs_fail(gold_index, rotation, e)
                     continue
 
             if received_datagram is None:
@@ -439,7 +336,6 @@ def finalize_result_once():
             break
 
     per = num_datagram_errors(test_arr, received_datagrams)
-    _log_decode_stage_summary()
     print(f"\nSent {len(test_arr)} datagrams, received {len(received_datagrams)} datagrams, with {per} datagram errors.")
 
 def _signal_handler(signum, frame):
@@ -466,7 +362,6 @@ def _cleanup():
         _cleaned_up = True
 
     logging.info("Starting cleanup...")
-    _log_decode_stage_summary()
 
     stop()
 
@@ -649,13 +544,6 @@ if __name__ == "__main__":
         console=bool(config["logging"].get("console", True)),
         file_output=bool(config["logging"].get("file", True)),
     )
-    config = _configure_ack_harness_role(config, "responder")
-    logging.info(
-        "ACK harness role=%s tx_carrier=%.3f MHz rx_carrier=%.3f MHz",
-        config["ack_harness_role"],
-        float(config["transmitter"]["tx_carrier"]) / 1e6,
-        float(config["receiver"]["rx_carrier"]) / 1e6,
-    )
 
     # ================== Signal handlers for graceful shutdown ==================
     atexit.register(_cleanup)
@@ -689,13 +577,6 @@ if __name__ == "__main__":
 
     finalized = False
     finalize_lock = threading.Lock()
-    decode_stats_lock = threading.Lock()
-    decode_summary_lock = threading.Lock()
-    gold_success_count = 0
-    gold_fail_count = 0
-    rs_success_count = 0
-    rs_fail_count = 0
-    decode_summary_logged = False
 
     # ================== Message queues for inter-thread communication ==================
     rx_queue: Queue[Datagram] = Queue(maxsize=NUMBER_OF_DATAGRAMS)       # Queue for incoming messages received by the RX thread to be processed by the TUI thread
