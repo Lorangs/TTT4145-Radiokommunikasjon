@@ -45,29 +45,22 @@ SPINNER_FRAMES = ("|", "/", "-", "\\")
 
 
 def _configure_ack_harness_role(config: dict, role: str) -> dict:
-    """
-    Return a config view for the ACK harness role.
-
-    The no-ACK harnesses are one-way, so they can rely on the config's
-    `transmitter.tx_carrier` and `receiver.rx_carrier` directly.
-    The ACK harnesses are bidirectional:
-    - initiator: TX on forward-link carrier, RX on reverse-link carrier
-    - responder: RX on forward-link carrier, TX on reverse-link carrier
-    """
-    cfg = deepcopy(config)
-    forward_carrier = float(cfg["transmitter"]["tx_carrier"])
-    reverse_carrier = float(cfg["receiver"]["rx_carrier"])
+    """Return a config view with TX/RX carriers mapped for the ACK test role."""
+    configured = deepcopy(config)
+    tx_carrier = float(configured["transmitter"]["tx_carrier"])
+    rx_carrier = float(configured["receiver"]["rx_carrier"])
 
     if role == "initiator":
-        cfg["transmitter"]["tx_carrier"] = forward_carrier
-        cfg["receiver"]["rx_carrier"] = reverse_carrier
+        configured["transmitter"]["tx_carrier"] = tx_carrier
+        configured["receiver"]["rx_carrier"] = rx_carrier
     elif role == "responder":
-        cfg["receiver"]["rx_carrier"] = forward_carrier
-        cfg["transmitter"]["tx_carrier"] = reverse_carrier
+        configured["transmitter"]["tx_carrier"] = rx_carrier
+        configured["receiver"]["rx_carrier"] = tx_carrier
     else:
-        raise ValueError(f"Unknown ACK harness role: {role}")
+        raise ValueError(f"Unsupported ACK harness role: {role}")
 
-    return cfg
+    configured["ack_harness_role"] = role
+    return configured
 
 def _reset_tx_progress(total: int) -> None:
     global tx_total_messages, tx_sent_messages
@@ -189,7 +182,86 @@ def _ack_received(msg_id: int) -> None:
             logging.info(f"Received ACK for datagram ID {msg_id}. Removed from pending ACKs.")
         else:
             logging.warning(f"Received ACK for unknown datagram ID {msg_id}. No matching pending ACK found.")
-        
+
+
+def _log_gold_success(gold_index: int, best_rotation: int) -> None:
+    global gold_success_count
+    with decode_stats_lock:
+        gold_success_count += 1
+        success = gold_success_count
+        fail = gold_fail_count
+    logging.debug(
+        "Gold success: success=%s fail=%s gold_index=%s best_rotation=%s",
+        success,
+        fail,
+        gold_index,
+        best_rotation,
+    )
+
+
+def _log_gold_fail(reason: str, gold_index: int | None = None) -> None:
+    global gold_fail_count
+    with decode_stats_lock:
+        gold_fail_count += 1
+        success = gold_success_count
+        fail = gold_fail_count
+    if gold_index is None:
+        logging.debug("Gold fail: success=%s fail=%s reason=%s", success, fail, reason)
+        return
+    logging.debug(
+        "Gold fail: success=%s fail=%s reason=%s gold_index=%s",
+        success,
+        fail,
+        reason,
+        gold_index,
+    )
+
+
+def _log_rs_success(gold_index: int, rotation: int, decoded_bytes: int) -> None:
+    global rs_success_count
+    with decode_stats_lock:
+        rs_success_count += 1
+        success = rs_success_count
+        fail = rs_fail_count
+    logging.debug(
+        "RS success: success=%s fail=%s gold_index=%s rotation=%s decoded_bytes=%s",
+        success,
+        fail,
+        gold_index,
+        rotation,
+        decoded_bytes,
+    )
+
+
+def _log_rs_fail(gold_index: int, rotation: int, error: Exception) -> None:
+    global rs_fail_count
+    with decode_stats_lock:
+        rs_fail_count += 1
+        success = rs_success_count
+        fail = rs_fail_count
+    logging.debug(
+        "RS fail: success=%s fail=%s gold_index=%s rotation=%s error=%s",
+        success,
+        fail,
+        gold_index,
+        rotation,
+        error,
+    )
+
+
+def _log_decode_stage_summary() -> None:
+    global decode_summary_logged
+    with decode_summary_lock:
+        if decode_summary_logged:
+            return
+        decode_summary_logged = True
+        gold_success = gold_success_count
+        gold_fail = gold_fail_count
+        rs_success = rs_success_count
+        rs_fail = rs_fail_count
+    logging.info("Gold summary: success=%s fail=%s", gold_success, gold_fail)
+    logging.info("RS summary: success=%s fail=%s", rs_success, rs_fail)
+
 
 ##############################################################################################
 # ================= Callback loops for threads =================
@@ -216,18 +288,20 @@ def _rx_loop():
             )
 
             if gold_index is None:
-                # logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
+                _log_gold_fail("no_candidate")
                 continue   # skip if gold code is not detected, likely not a valid signal to process
             if not gold_detector.candidate_fits_frame(
                 len(fine_freq_adjusted), 
                 gold_index,
                 EXPECTED_PAYLOAD_SYMBOLS
             ):
+                _log_gold_fail("frame_bounds", gold_index)
                 continue
             best_rotation = gold_detector.estimate_rotation_from_gold(
                 fine_freq_adjusted,
                 gold_index,
             )
+            _log_gold_success(gold_index, best_rotation)
 
             received_datagram = None
 
@@ -258,10 +332,12 @@ def _rx_loop():
                     descrambled_bytes = scrambler.apply(conv_decoded_bytes)
                     interleaved_bytes = interleaver.deinterleave(descrambled_bytes)
                     fec_decoded_bits = fec_codec.decode(interleaved_bytes)
+                    _log_rs_success(gold_index, rotation, len(fec_decoded_bits))
                     received_datagram = Datagram.unpack(fec_decoded_bits)
 
                     break
                 except (ValueError, RuntimeError) as e:
+                    _log_rs_fail(gold_index, rotation, e)
                     logging.debug(
                         "Rotation decode attempt failed: gold_index=%s rotation=%s error=%s",
                         gold_index,
@@ -509,6 +585,7 @@ def _cleanup():
         _cleaned_up = True
 
     logging.info("Starting cleanup...")
+    _log_decode_stage_summary()
 
     stop()
 
@@ -720,7 +797,8 @@ if __name__ == "__main__":
     )
     config = _configure_ack_harness_role(config, "initiator")
     logging.info(
-        "ACK harness role=initiator tx_carrier=%.3f MHz rx_carrier=%.3f MHz",
+        "ACK harness role=%s tx_carrier=%.3f MHz rx_carrier=%.3f MHz",
+        config["ack_harness_role"],
         float(config["transmitter"]["tx_carrier"]) / 1e6,
         float(config["receiver"]["rx_carrier"]) / 1e6,
     )
@@ -775,6 +853,13 @@ if __name__ == "__main__":
 
     _cleaned_up = False
     _cleanup_lock = threading.Lock()
+    decode_stats_lock = threading.Lock()
+    decode_summary_lock = threading.Lock()
+    gold_success_count = 0
+    gold_fail_count = 0
+    rs_success_count = 0
+    rs_fail_count = 0
+    decode_summary_logged = False
 
     # ================== Message queues for inter-thread communication ==================
     tx_queue: Queue[Datagram] = Queue(maxsize=64)       # Queue for outgoing messages to be transmitted by the TX thread
