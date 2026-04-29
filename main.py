@@ -932,8 +932,8 @@ if __name__ == "__main__":
         level_name=get_configured_log_level(config),
         session_name="debug",
         log_file=debug_file,
-        console=bool(config['logging']['log_to_console']),
-        file_output=bool(config['logging']['log_to_file']),
+        console=bool(config['logging']['console']),
+        file_output=bool(config['logging']['file']),
     )
 
     try:

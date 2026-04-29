@@ -33,7 +33,7 @@ from interleaver import Interleaver
 from scrambler import LFSRScrambler
 from project_logger import configure_project_logging, get_configured_log_level
 
-NUMBER_OF_DATAGRAMS = 100
+NUMBER_OF_DATAGRAMS = 1000
 
 SPINNER = ['|', '/', '-', '\\']
 
@@ -99,6 +99,37 @@ def queue_datagram(datagram: Datagram) -> bool:
         return False
 
 
+def _record_decode_stage_result(stage: str, success: bool, context: str = "") -> None:
+    """Track and log decode-stage outcomes with running totals."""
+    with decode_stats_lock:
+        stage_counts = decode_stats.setdefault(stage, {"success": 0, "fail": 0})
+        key = "success" if success else "fail"
+        stage_counts[key] += 1
+        success_count = stage_counts["success"]
+        fail_count = stage_counts["fail"]
+
+    outcome = "success" if success else "fail"
+    message = (
+        f"{stage} {outcome}: success={success_count} fail={fail_count}"
+    )
+    if context:
+        message += f" {context}"
+    logging.debug(message)
+
+
+def _log_decode_stage_summary() -> None:
+    """Log the accumulated Gold/RS decode statistics."""
+    with decode_stats_lock:
+        for stage in sorted(decode_stats):
+            stage_counts = decode_stats[stage]
+            logging.info(
+                "%s summary: success=%d fail=%d",
+                stage,
+                stage_counts.get("success", 0),
+                stage_counts.get("fail", 0),
+            )
+
+
 ##############################################################################################
 # ================= Callback loops for threads =================
 ##############################################################################################
@@ -124,17 +155,27 @@ def _rx_loop():
             )
 
             if gold_index is None:
-                # logging.debug("Gold code not detected in received signal. Skipping processing of this signal.")
+                _record_decode_stage_result("Gold", False, "reason=no_candidate")
                 continue   # skip if gold code is not detected, likely not a valid signal to process
             if not gold_detector.candidate_fits_frame(
                 len(fine_freq_adjusted), 
                 gold_index,
                 EXPECTED_PAYLOAD_SYMBOLS
             ):
+                _record_decode_stage_result(
+                    "Gold",
+                    False,
+                    f"reason=candidate_out_of_frame gold_index={gold_index}",
+                )
                 continue
             best_rotation = gold_detector.estimate_rotation_from_gold(
                 fine_freq_adjusted,
                 gold_index,
+            )
+            _record_decode_stage_result(
+                "Gold",
+                True,
+                f"gold_index={gold_index} best_rotation={best_rotation}",
             )
 
     
@@ -171,7 +212,24 @@ def _rx_loop():
                     conv_decoded_bytes = conv_coder.decode(received_bits)
                     descrambled_bytes = scrambler.apply(conv_decoded_bytes)
                     interleaved_bytes = interleaver.deinterleave(descrambled_bytes)
-                    fec_decoded_bits = fec_codec.decode(interleaved_bytes)
+                    try:
+                        fec_decoded_bits = fec_codec.decode(interleaved_bytes)
+                    except (ValueError, RuntimeError) as e:
+                        _record_decode_stage_result(
+                            "RS",
+                            False,
+                            f"gold_index={gold_index} rotation={rotation} error={e}",
+                        )
+                        raise
+
+                    _record_decode_stage_result(
+                        "RS",
+                        True,
+                        (
+                            f"gold_index={gold_index} rotation={rotation}"
+                            f" decoded_bytes={len(fec_decoded_bits)}"
+                        ),
+                    )
                     received_datagram = Datagram.unpack(fec_decoded_bits)
 
                     break
@@ -294,6 +352,7 @@ def finalize_result_once():
 
     per = num_datagram_errors(test_arr, received_datagrams)
     print(f"\nSent {len(test_arr)} datagrams, received {len(received_datagrams)} datagrams, with {per} datagram errors.")
+    _log_decode_stage_summary()
 
 def _signal_handler(signum, frame):
     """Handle termination signals for graceful shutdown."""
@@ -475,6 +534,18 @@ if __name__ == "__main__":
     EQUALIZER_REGULARIZATION = float(
     config["synchronization"].get("short_equalizer_regularization", 1.0e-3)
 )
+
+    # ================== Logging setup ==================
+    log_dir = "log"
+    os.makedirs(log_dir, exist_ok=True)
+    debug_file = os.path.join(log_dir, f"{datetime.now().date()}-debug.log")
+    configure_project_logging(
+        level_name=get_configured_log_level(config),
+        session_name="debug",
+        log_file=debug_file,
+        console=bool(config["logging"]["console"]),
+        file_output=bool(config["logging"]["file"]),
+    )
     
     # ================== Signal handlers for graceful shutdown ==================
     atexit.register(_cleanup)
@@ -510,6 +581,11 @@ if __name__ == "__main__":
 
     # ================== Message queues for inter-thread communication ==================
     rx_queue: Queue[Datagram] = Queue(maxsize=NUMBER_OF_DATAGRAMS)       # Queue for incoming messages received by the RX thread to be processed by the TUI thread
+    decode_stats = {
+        "Gold": {"success": 0, "fail": 0},
+        "RS": {"success": 0, "fail": 0},
+    }
+    decode_stats_lock = threading.Lock()
     
 
     # ======================= start application =========================

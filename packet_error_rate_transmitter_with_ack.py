@@ -6,6 +6,7 @@ import time
 import logging
 import select
 import threading
+from copy import deepcopy
 from queue import Queue, Empty, Full
 from datetime import datetime
 from typing import Dict
@@ -41,6 +42,32 @@ STAGES = (
     "Transmitting Datagrams",
 )
 SPINNER_FRAMES = ("|", "/", "-", "\\")
+
+
+def _configure_ack_harness_role(config: dict, role: str) -> dict:
+    """
+    Return a config view for the ACK harness role.
+
+    The no-ACK harnesses are one-way, so they can rely on the config's
+    `transmitter.tx_carrier` and `receiver.rx_carrier` directly.
+    The ACK harnesses are bidirectional:
+    - initiator: TX on forward-link carrier, RX on reverse-link carrier
+    - responder: RX on forward-link carrier, TX on reverse-link carrier
+    """
+    cfg = deepcopy(config)
+    forward_carrier = float(cfg["transmitter"]["tx_carrier"])
+    reverse_carrier = float(cfg["receiver"]["rx_carrier"])
+
+    if role == "initiator":
+        cfg["transmitter"]["tx_carrier"] = forward_carrier
+        cfg["receiver"]["rx_carrier"] = reverse_carrier
+    elif role == "responder":
+        cfg["receiver"]["rx_carrier"] = forward_carrier
+        cfg["transmitter"]["tx_carrier"] = reverse_carrier
+    else:
+        raise ValueError(f"Unknown ACK harness role: {role}")
+
+    return cfg
 
 def _reset_tx_progress(total: int) -> None:
     global tx_total_messages, tx_sent_messages
@@ -690,6 +717,12 @@ if __name__ == "__main__":
         log_file=debug_file,
         console=bool(config["logging"].get("console", True)),
         file_output=bool(config["logging"].get("file", True))
+    )
+    config = _configure_ack_harness_role(config, "initiator")
+    logging.info(
+        "ACK harness role=initiator tx_carrier=%.3f MHz rx_carrier=%.3f MHz",
+        float(config["transmitter"]["tx_carrier"]) / 1e6,
+        float(config["receiver"]["rx_carrier"]) / 1e6,
     )
 
     try:

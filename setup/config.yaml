@@ -1,6 +1,6 @@
 # Logging configuration
 logging:
-  level: ERROR  # Logging level: DEBUG, INFO, WARNING, ERROR
+  level: DEBUG  # Logging level: DEBUG, INFO, WARNING, ERROR
   console: False  # Enable logging to console
   file: true  # Enable logging to file
 
@@ -9,7 +9,7 @@ radio:
   ip_address: ip:192.168.0.151  # IP address of SDR radio
   queue_size: 4000  # Max size of RX and TX queues.
   num_tui_msg: 100  # Number of messages to display in the TUI.
-  debug_mode: false  # If True, the system will run in debug mode with live plotting of signals.
+  debug_mode: False  # If True, the system will run in debug mode with live plotting of signals.
 
 tui:
   frames_per_second: 10  # Target frames per second for TUI updates
@@ -26,7 +26,7 @@ link_control:
 # They are duplicated here to keep all configurable parameters in one place,
 # but changes should be made in both places to maintain consistency.
 datagram:
-  ack_timeout_ms: 1000  # Timeout for ACK in milliseconds
+  ack_timeout_ms: 2000  # Timeout for ACK in milliseconds
   max_retries: 3  # Maximum number of retries
   msg_id_size: 1  # Size of message ID in bytes
   msg_type_size: 1  # Size of message type in bytes
@@ -53,7 +53,7 @@ receiver:
   rx_bandwidth: 1e6  # RX bandwidth in Hz
   rx_carrier: 867.5e6  # RX local oscillator (carrier frequency) in Hz
   gain_mode: manual  # Gain mode: "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
-  buffer_size: 16384  # RX buffer size
+  buffer_size: 16384  # RX buffer size 2^14 = 16384
 
 # Modulation settings
 modulation:
