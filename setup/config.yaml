@@ -9,17 +9,17 @@ radio:
   ip_address: ip:192.168.0.151  # IP address of SDR radio
   queue_size: 4000  # Max size of RX and TX queues.
   num_tui_msg: 100  # Number of messages to display in the TUI.
-  debug_mode: false  # If True, the system will run in debug mode with live plotting of signals.
+  debug_mode: true  # If True, the system will run in debug mode with live plotting of signals.
 
 tui:
   frames_per_second: 10  # Target frames per second for TUI updates
 
 # Link control settings
 link_control:
-  enable_ack: True          # Enable ACK mechanism
+  enable_ack: False          # Enable ACK mechanism
   enable_nack: False        # Enable NACK mechanism
-  enable_retransmit: True   # Enable packet retransmission
-  track_pending_data: True  # Track pending data
+  enable_retransmit: False   # Enable packet retransmission
+  track_pending_data: False  # Track pending data
 
 # Datagram format parameters
 # These parameters are copies of the corresponding values in datagram.py.
@@ -42,16 +42,16 @@ transmitter:
   tx_cyclic_buffer: False  # Enable/disable cyclic buffer
   tx_gain_dB: 0  # TX gain in dB, range: -90 to 0 dB
   tx_bandwidth: 1e6  # TX bandwidth in Hz
-  tx_carrier: 865.5e6  # TX local oscillator (carrier frequency) in Hz
+  tx_carrier: 867.5e6  # TX local oscillator (carrier frequency) in Hz
   tx_buffer_size: 1024  # TX buffer size in samples (2**10)
   tx_guard_symbols: 32  # Number of guard symbols (idle time) to insert between packets. Adjust based on expected channel conditions and timing requirements. More guard symbols can help with timing acquisition and reduce inter-packet interference, but also increase overhead.
   tx_peak_scale: 0.39  # Normalization factor for TX Burst, keeps burst even (less variation at operating point)
 
 # Receiver settings
 receiver:
-  rx_gain_dB: 35  # RX gain in dB, range: 0 to 73 dB
+  rx_gain_dB: 30  # RX gain in dB, range: 0 to 73 dB
   rx_bandwidth: 1e6  # RX bandwidth in Hz
-  rx_carrier: 867.5e6  # RX local oscillator (carrier frequency) in Hz
+  rx_carrier: 865.5e6  # RX local oscillator (carrier frequency) in Hz
   gain_mode: manual  # Gain mode: "manual" or Automatic Gain Control: "fast_attack", "slow_attack"
   buffer_size: 16384  # RX buffer size
 
@@ -112,18 +112,18 @@ synchronization:
 # Plotter settings
 plotter:
   num_rows: 200  # Number of rows in the plot
-  center_freq: 866.5e6  # Center frequency in Hz
+  center_freq: 865.5e6  # Center frequency in Hz
   time_plot_samples: 500  # Number of samples for time plot
   update_interval: 100  # Update interval in milliseconds
   psd_nperseg: 1024  # Number of points per segment for PSD
   max_constellation_points: 500  # Maximum number of constellation points
   psd_window: hann  # Window function for PSD
   psd_scaling: density
-  psd_max_points: 2048
+  psd_max_points: 1024
   multi_window: false
 
 plot_capture:
-  enabled: true
+  enabled: false
   output_dir: artifacts/rf_plots
   save_tx_burst: false
-  save_rx_gold_detect: true
+  save_rx_gold_detect: false

@@ -452,7 +452,7 @@ def _tui_loop():
             logging.error(f"Error in TUI loop: {e}")
             continue
 
-        time.sleep(0.5)  # Sleep briefly to reduce CPU usage.
+        time.sleep(0.1)  # Sleep briefly to reduce CPU usage.
     logging.debug("TUI loop stopped.")
 
 def _slice_text_to_payload_chunks(text: str, max_payload_bytes: int) -> list[str]:
@@ -932,8 +932,8 @@ if __name__ == "__main__":
         level_name=get_configured_log_level(config),
         session_name="debug",
         log_file=debug_file,
-        console=bool(config['logging']['log_to_console']),
-        file_output=bool(config['logging']['log_to_file']),
+        console=bool(config['logging']['console']),
+        file_output=bool(config['logging']['file']),
     )
 
     try:
